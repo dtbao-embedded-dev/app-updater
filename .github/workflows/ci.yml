@@ -42,10 +42,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Trust the workspace
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      # pip lives in the IDF virtualenv and is on PATH only after export.sh;
+      # the default container shell is sh, which does not source it.
       - name: Install the analysers
+        shell: bash
         run: |
           apt-get update -qq && apt-get install -y -qq cppcheck
-          pip install --quiet "clang-tidy==${CLANG_TIDY_VERSION}"
+          . "$IDF_PATH/export.sh"
+          python -m pip install --quiet "clang-tidy==${CLANG_TIDY_VERSION}"
       # clang-tidy needs the exact compile flags, and the only build here that
       # produces them for a compiler clang can parse is the host one - the
       # firmware targets Xtensa, which upstream clang does not support. So

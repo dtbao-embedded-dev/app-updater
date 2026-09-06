@@ -10,11 +10,16 @@ the part nobody remembers.
     python docs/scripts/tool-esp.py flash [-p COM7]
     python docs/scripts/tool-esp.py monitor [-p COM7]
     python docs/scripts/tool-esp.py size
+    python docs/scripts/tool-esp.py merge                one image, flashed at 0x0
     python docs/scripts/tool-esp.py clean
     python docs/scripts/tool-esp.py menuconfig
     python docs/scripts/tool-esp.py format [--check]
-    python docs/scripts/tool-esp.py test
+    python docs/scripts/tool-esp.py test [--sanitize]
     python docs/scripts/tool-esp.py analyse
+
+CI and the release workflow call these same commands, so the workspace path,
+the fused `size size-components`, and the factory image name live in exactly
+one place. A second copy in a workflow is one that drifts while staying green.
 
 ESP-IDF is found through `.env.esp` at the repo root, which holds the path to
 the checkout that has export.bat / export.sh. The file is per-machine and
@@ -41,7 +46,8 @@ ENV_FILE = REPO / ".env.esp"
 # Commands that talk to a board, so a port is meaningful. Everything else
 # rejects -p rather than accepting it and quietly doing nothing with it.
 PORT_COMMANDS = ("flash", "monitor")
-IDF_COMMANDS = ("build", "flash", "monitor", "size", "clean", "menuconfig")
+IDF_COMMANDS = ("build", "flash", "monitor", "size", "clean", "menuconfig", "merge")
+VERSION_FILE = REPO / "VERSION"
 
 ENV_TEMPLATE = """# Where ESP-IDF lives on THIS machine.
 #
@@ -238,17 +244,31 @@ def source_files() -> list[Path]:
     return found
 
 
-def run_tests() -> int:
-    """R-TST-02: the pure logic runs on a PC, with no board attached.
+def host_env() -> dict[str, str]:
+    """The environment the host test build wants.
 
-    Unity comes from the ESP-IDF checkout, so a developer who can build the
-    firmware can run the tests with nothing else installed.
+    Exactly ONE thing comes from ESP-IDF - the path, so the harness CMakeLists
+    can find Unity. Handing over the whole exported environment is actively
+    wrong: it puts esp-clang first on PATH and CMake then tries to build the
+    HOST tests with a cross compiler for the target.
     """
+    env = dict(os.environ)
+    if not env.get("IDF_PATH"):
+        configured = read_env_file()
+        if configured:
+            env["IDF_PATH"] = configured
+    return env
+
+
+def configure_host(sanitize: bool) -> tuple[Path, dict[str, str], int]:
+    """Configure and build the host harness. Returns (build dir, env, status)."""
     if shutil.which("cmake") is None:
         sys.exit("cmake is not on PATH.")
 
     src = REPO / "test" / "host"
-    out = REPO / "build" / "host"
+    # Separate trees so the plain and instrumented builds can both exist; CI
+    # runs them as two jobs against the same checkout.
+    out = REPO / "build" / ("san" if sanitize else "host")
 
     # Ninja rather than the platform default: on Windows the default is MSVC,
     # which cannot take the firmware's warning flags. Only on the first
@@ -256,23 +276,28 @@ def run_tests() -> int:
     configure = ["cmake", "-S", str(src), "-B", str(out)]
     if not (out / "CMakeCache.txt").exists() and shutil.which("ninja"):
         configure += ["-G", "Ninja"]
+    if sanitize:
+        configure += ["-DSANITIZE=ON"]
 
-    # The harness needs exactly ONE thing from ESP-IDF - the path, so its
-    # CMakeLists can find Unity. Handing over the whole exported environment is
-    # actively wrong: that environment puts esp-clang first on PATH and CMake
-    # then tries to build the HOST tests with a cross compiler for the target.
-    # A tree already configured with -DUNITY_DIR needs none of this.
-    env = dict(os.environ)
-    if not env.get("IDF_PATH"):
-        configured = read_env_file()
-        if configured:
-            env["IDF_PATH"] = configured
+    env = host_env()
     for step in (configure, ["cmake", "--build", str(out)]):
         print(" ".join(step), flush=True)
         rc = subprocess.call(step, env=env)
         if rc != 0:
-            return rc
+            return out, env, rc
+    return out, env, 0
 
+
+def run_tests(sanitize: bool = False) -> int:
+    """R-TST-02: the pure logic runs on a PC, with no board attached.
+
+    Unity comes from the ESP-IDF checkout, so a developer who can build the
+    firmware can run the tests with nothing else installed. `sanitize` adds
+    ASan and UBSan (R-SAN-08).
+    """
+    out, env, rc = configure_host(sanitize)
+    if rc != 0:
+        return rc
     return subprocess.call(["ctest", "--test-dir", str(out), "--output-on-failure"],
                            env=env)
 
@@ -302,13 +327,17 @@ def run_analyse() -> int:
         print("cppcheck over", len(files), "file(s)", flush=True)
         rc |= subprocess.call(cmd)
 
+    # Configure the harness if it has not been: a compile database is something
+    # this command can produce, so making the caller remember to run `test`
+    # first was a trap rather than a contract.
     db = REPO / "build" / "host" / "compile_commands.json"
     if shutil.which("clang-tidy") is None:
         print("clang-tidy not on PATH - skipping")
-    elif not db.exists():
-        print(f"no compile database at {db} - run `tool-esp.py test` first")
-        rc |= 1
     else:
+        if not db.exists():
+            _, _, configure_rc = configure_host(sanitize=False)
+            if configure_rc != 0:
+                return rc | configure_rc
         ours = [e["file"] for e in json.loads(db.read_text())
                 if any(f"/{top}/" in e["file"].replace("\\", "/")
                        for top in SOURCE_DIRS)]
@@ -346,6 +375,8 @@ def main() -> int:
                              f"{', '.join(PORT_COMMANDS)}, or no command")
     parser.add_argument("--check", action="store_true",
                         help="format only: report instead of rewriting")
+    parser.add_argument("--sanitize", action="store_true",
+                        help="test only: build with ASan and UBSan")
     args = parser.parse_args()
     clear_screen()
 
@@ -356,6 +387,8 @@ def main() -> int:
                      f"to {', '.join(PORT_COMMANDS)} or to no command at all")
     if args.check and args.command != "format":
         parser.error("--check applies to `format` only")
+    if args.sanitize and args.command != "test":
+        parser.error("--sanitize applies to `test` only")
 
     if args.command is None:
         # The whole loop in one idf.py call: a second invocation would rebuild
@@ -364,7 +397,7 @@ def main() -> int:
     if args.command == "format":
         return run_format(args.check)
     if args.command == "test":
-        return run_tests()
+        return run_tests(args.sanitize)
     if args.command == "analyse":
         return run_analyse()
     if args.command == "flash":
@@ -375,6 +408,13 @@ def main() -> int:
     if args.command == "size":
         # R-BLD-04: the number nobody looks at is the number that runs out.
         return idf(["size", "size-components"], None)
+    if args.command == "merge":
+        # One image flashed at 0x0 provisions a blank board, with no offsets to
+        # get wrong at a bench. The name carries the version so a downloaded
+        # file says what it is; VERSION is the single source (R-VER-01), so the
+        # release workflow does not get to invent a second one.
+        version = VERSION_FILE.read_text(encoding="utf-8").strip()
+        return idf(["merge-bin", "-o", f"app-updater-v{version}-factory.bin"], None)
     return idf([args.command], None)
 
 

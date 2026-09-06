@@ -526,6 +526,14 @@ into `main` or `developing`. Concurrent runs of the same ref cancel each other.
 All six run in parallel; a concurrent push to the same ref cancels the earlier
 run.
 
+**Every step goes through `docs/scripts/tool-esp.py`, never `idf.py` or `cmake`
+directly.** That is not tidiness: the workspace path, the fused
+`size size-components`, the sanitizer flags and the factory image name would
+otherwise exist in both the script and the workflows. A second copy is one that
+drifts while CI stays green - building a real project, just not the one that
+changed. The release workflow does the same, and `merge` takes the image name
+from `VERSION`, which the tag gate has already proved equals the tag.
+
 **Every tool version is pinned**, named once in the workflow's `env` block:
 `clang-format 22.1.5`, `clang-tidy 22.1.8`, `gitleaks 8.30.1`. An unpinned CI
 rejects on Tuesday what it accepted on Monday, on code nobody touched — and a
@@ -1142,12 +1150,14 @@ invocation, with the port detected.
 | *(none)* | `idf.py build flash monitor` with the detected port | The default: the whole loop, one command |
 | `format` | `clang-format -i` over our sources | With `--check`: `--dry-run --Werror` instead |
 | `test` | Configure + build `test/host`, then `ctest` | No board needed; see the note below |
-| `analyse` | `cppcheck` over our `.c`, `clang-tidy` over the host compile database | Needs `test/host` configured first |
+| `merge` | `idf.py merge-bin -o app-updater-v<VERSION>-factory.bin` | One image at `0x0`; the name comes from `VERSION` |
+| `analyse` | `cppcheck` over our `.c`, `clang-tidy` over the host compile database | Configures the database itself when absent |
 
 | Flag | Applies to | Meaning |
 |------|-----------|---------|
 | `-p` / `--port` | `flash`, `monitor`, no command | Serial port, e.g. `COM7`. Omit and it is detected. |
 | `--check` | `format` | Report instead of rewriting |
+| `--sanitize` | `test` | ASan + UBSan, into a separate `build/san` tree |
 
 **A flag that does not apply is rejected, not ignored.** `format -p COM7` and
 `build --check` both exit 2 with a message naming what the flag is for. A flag

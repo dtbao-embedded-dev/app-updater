@@ -32,12 +32,14 @@ invocation, with the port detected.
 | *(none)* | `idf.py build flash monitor` with the detected port | The default: the whole loop, one command |
 | `format` | `clang-format -i` over our sources | With `--check`: `--dry-run --Werror` instead |
 | `test` | Configure + build `test/host`, then `ctest` | No board needed; see the note below |
-| `analyse` | `cppcheck` over our `.c`, `clang-tidy` over the host compile database | Needs `test/host` configured first |
+| `merge` | `idf.py merge-bin -o app-updater-v<VERSION>-factory.bin` | One image at `0x0`; the name comes from `VERSION` |
+| `analyse` | `cppcheck` over our `.c`, `clang-tidy` over the host compile database | Configures the database itself when absent |
 
 | Flag | Applies to | Meaning |
 |------|-----------|---------|
 | `-p` / `--port` | `flash`, `monitor`, no command | Serial port, e.g. `COM7`. Omit and it is detected. |
 | `--check` | `format` | Report instead of rewriting |
+| `--sanitize` | `test` | ASan + UBSan, into a separate `build/san` tree |
 
 **A flag that does not apply is rejected, not ignored.** `format -p COM7` and
 `build --check` both exit 2 with a message naming what the flag is for. A flag

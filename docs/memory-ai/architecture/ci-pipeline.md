@@ -59,6 +59,14 @@ into `main` or `developing`. Concurrent runs of the same ref cancel each other.
 All six run in parallel; a concurrent push to the same ref cancels the earlier
 run.
 
+**Every step goes through `docs/scripts/tool-esp.py`, never `idf.py` or `cmake`
+directly.** That is not tidiness: the workspace path, the fused
+`size size-components`, the sanitizer flags and the factory image name would
+otherwise exist in both the script and the workflows. A second copy is one that
+drifts while CI stays green - building a real project, just not the one that
+changed. The release workflow does the same, and `merge` takes the image name
+from `VERSION`, which the tag gate has already proved equals the tag.
+
 **Every tool version is pinned**, named once in the workflow's `env` block:
 `clang-format 22.1.5`, `clang-tidy 22.1.8`, `gitleaks 8.30.1`. An unpinned CI
 rejects on Tuesday what it accepted on Monday, on code nobody touched — and a

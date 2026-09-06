@@ -33,16 +33,16 @@ jobs:
             exit 1
           fi
 
+      # Through tool-esp.py, like CI: the workspace path and the factory image
+      # name live in the script, and `merge` takes that name from VERSION - which
+      # the gate above has already proved equals the tag.
       - name: Build
         shell: bash
         run: |
           . "$IDF_PATH/export.sh"
-          idf.py -C workspace/0xF001 build
-          idf.py -C workspace/0xF001 size | tee size-report.txt
-          # One image, flashed at 0x0, provisions a blank board in a single
-          # command - no offsets to get wrong at a bench.
-          idf.py -C workspace/0xF001 merge-bin \
-            -o "app-updater-${GITHUB_REF_NAME}-factory.bin"
+          python docs/scripts/tool-esp.py build
+          python docs/scripts/tool-esp.py size | tee size-report.txt
+          python docs/scripts/tool-esp.py merge
 
       - name: Collect the artifacts a field unit needs
         shell: bash
@@ -51,7 +51,8 @@ jobs:
           build="workspace/0xF001/build"
           mkdir -p dist
 
-          # Provisioning a blank board.
+          # Provisioning a blank board. The name comes from VERSION via
+          # `tool-esp.py merge`, and the tag gate above proved they agree.
           cp "$build/app-updater-${GITHUB_REF_NAME}-factory.bin" dist/
           cp "$build/bootloader/bootloader.bin"                  dist/
           cp "$build/partition_table/partition-table.bin"        dist/

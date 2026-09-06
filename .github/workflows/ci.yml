@@ -2,6 +2,11 @@ name: CI
 
 # The gates R-SAN asks for: the compiler first, then clang-tidy and cppcheck,
 # then the host suite under ASan/UBSan, plus a secret scan over the whole tree.
+#
+# Every step runs through docs/scripts/tool-esp.py rather than idf.py or cmake
+# directly. The workspace path, the fused `size size-components` and the
+# sanitizer flags then exist once. A second copy here is one that drifts while
+# CI stays green - building a real project, just not the one that changed.
 on:
   push:
     branches: [main, developing, "release/**"]
@@ -58,7 +63,6 @@ jobs:
         shell: bash
         run: |
           . "$IDF_PATH/export.sh"
-          cmake -S test/host -B build/host
           python docs/scripts/tool-esp.py analyse
 
   host-tests:
@@ -73,9 +77,7 @@ jobs:
         shell: bash
         run: |
           . "$IDF_PATH/export.sh"
-          cmake -S test/host -B build/host
-          cmake --build build/host
-          ctest --test-dir build/host --output-on-failure
+          python docs/scripts/tool-esp.py test
 
   sanitizers:
     name: host tests (ASan + UBSan)
@@ -92,9 +94,7 @@ jobs:
         shell: bash
         run: |
           . "$IDF_PATH/export.sh"
-          cmake -S test/host -B build/san -DSANITIZE=ON
-          cmake --build build/san
-          ctest --test-dir build/san --output-on-failure
+          python docs/scripts/tool-esp.py test --sanitize
 
   # DEFERRED - gcc -fanalyzer. Verified clean on the current tree, deliberately
   # not enabled: this codebase has no heap, no files and no buffer arithmetic,
@@ -118,13 +118,15 @@ jobs:
         shell: bash
         run: |
           . "$IDF_PATH/export.sh"
-          idf.py -C workspace/0xF001 build
-      # R-BLD-04: the number nobody looks at is the number that runs out.
+          python docs/scripts/tool-esp.py build
+      # R-BLD-04: the number nobody looks at is the number that runs out. The
+      # script fuses `size size-components`, so the per-component breakdown
+      # cannot be lost by someone typing the short form here.
       - name: Flash and RAM usage
         shell: bash
         run: |
           . "$IDF_PATH/export.sh"
-          idf.py -C workspace/0xF001 size
+          python docs/scripts/tool-esp.py size
 
   secrets:
     name: secret scan

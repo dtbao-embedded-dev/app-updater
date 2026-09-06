@@ -5,9 +5,9 @@ order: 6
 purpose: The command surface of the repo's single developer entry point and what each command expands to.
 status: active
 updated: 2026-09-06
-source: docs/scripts/tool-esp.py
+source: docs/scripts/tool-esp.py, .env.esp
 confidence: confirmed
-keywords: tool-esp.py, build, flash, monitor, size, clean, menuconfig, format, test, analyse, --port, --check, IDF_PATH, UNITY_DIR
+keywords: tool-esp.py, .env.esp, IDF_PATH, IDF_PYTHON_ENV_PATH, MSYSTEM, build, flash, monitor, size, clean, menuconfig, format, test, analyse, --port, --check, UNITY_DIR, port detection
 ---
 
 # Developer CLI (tool-esp.py)
@@ -16,7 +16,10 @@ keywords: tool-esp.py, build, flash, monitor, size, clean, menuconfig, format, t
 
 ## Contract
 
-Invoked as `python docs/scripts/tool-esp.py <command> [flags]`.
+Invoked as `python docs/scripts/tool-esp.py [command] [flags]`.
+
+**With no command it builds, flashes and monitors**, in one `idf.py`
+invocation, with the port detected.
 
 | Command | Expands to | Notes |
 |---------|-----------|-------|
@@ -26,14 +29,49 @@ Invoked as `python docs/scripts/tool-esp.py <command> [flags]`.
 | `size` | `idf.py -C … size size-components` | Fused so the per-component breakdown is never skipped |
 | `clean` | `idf.py -C … clean` | |
 | `menuconfig` | `idf.py -C … menuconfig` | |
+| *(none)* | `idf.py build flash monitor` with the detected port | The default: the whole loop, one command |
 | `format` | `clang-format -i` over our sources | With `--check`: `--dry-run --Werror` instead |
 | `test` | Configure + build `test/host`, then `ctest` | No board needed; see the note below |
 | `analyse` | `cppcheck` over our `.c`, `clang-tidy` over the host compile database | Needs `test/host` configured first |
 
 | Flag | Applies to | Meaning |
 |------|-----------|---------|
-| `-p` / `--port` | the `idf.py` commands | Serial port, e.g. `COM7` or `/dev/ttyUSB0`. Omit and esptool picks one. |
+| `-p` / `--port` | `flash`, `monitor`, no command | Serial port, e.g. `COM7`. Omit and it is detected. |
 | `--check` | `format` | Report instead of rewriting |
+
+**A flag that does not apply is rejected, not ignored.** `format -p COM7` and
+`build --check` both exit 2 with a message naming what the flag is for. A flag
+that silently does nothing is one somebody will believe in.
+
+## Finding ESP-IDF
+
+`.env.esp` at the repo root holds `IDF_PATH=<checkout>`. It is per-machine and
+gitignored — committing it would point everyone else at a path that is not
+theirs.
+
+| Situation | What happens |
+|-----------|--------------|
+| No `.env.esp` | It is written from a commented template, and the run stops so it can be filled in |
+| `IDF_PATH=` still empty | Refuses, naming the file |
+| Path has no `export.bat`/`export.sh` | Refuses, saying it is not an ESP-IDF checkout |
+| Checkout present but tools never installed | Refuses, **quoting the export script's own error**, and naming `install.bat esp32s3` |
+| `IDF_PATH` already exported in the shell | Used as-is, no re-export |
+
+Three things this had to get right, each found by it going wrong:
+
+- **Setting `IDF_PATH` is not exporting ESP-IDF.** The export puts the cross
+  compiler, the venv, cmake and ninja on `PATH`. So the export script is run in
+  a subshell and the environment it produces is captured whole.
+- **`export.bat` refuses to run when `MSYSTEM` is set**, and Git Bash always
+  sets it. The variable is inherited into `cmd`, so it is dropped for that call.
+- **Windows resolves an executable against the parent process `PATH`**, not the
+  `env=` handed to the child. Bare `idf.py` is therefore never found, however
+  correct the exported `PATH` is; it is invoked through the interpreter from
+  ESP-IDF's own virtual environment instead.
+
+The guard is `IDF_PYTHON_ENV_PATH`, not `IDF_PATH`: `export.bat` sets the latter
+from its own location before doing any work, so a checkout with no tools
+installed still reports one.
 
 ## Behaviour worth knowing
 

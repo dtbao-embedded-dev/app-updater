@@ -21,9 +21,17 @@ the bootloader confirm it or roll back on the next boot.
 ## Build
 
 ```bash
-. $IDF_PATH/export.sh          # Windows: %IDF_PATH%\export.bat
 python docs/scripts/tool-esp.py build
 ```
+
+**The first run writes `.env.esp` and stops.** Paste the path to your ESP-IDF
+checkout after `IDF_PATH=` and run it again — the script exports ESP-IDF from
+there itself, so there is no `export.sh` to remember. That file is per-machine
+and gitignored.
+
+A checkout is not enough: its tools are installed once with
+`install.bat esp32s3` (or `install.sh esp32s3`), and the script says exactly
+that, quoting ESP-IDF's own error, when they are missing.
 
 Builds product **0xF001**, the only workspace in this repo. The version comes
 from the `VERSION` file and is injected into the image header, so the number the
@@ -46,13 +54,18 @@ Unity comes from your ESP-IDF checkout; point it elsewhere once with
 ## Flash and monitor
 
 ```bash
-python docs/scripts/tool-esp.py flash --port COM7      # Linux: --port /dev/ttyUSB0
-python docs/scripts/tool-esp.py monitor --port COM7
-python docs/scripts/tool-esp.py size                   # flash and RAM budget
+python docs/scripts/tool-esp.py                  # build + flash + monitor
+python docs/scripts/tool-esp.py flash            # port found for you
+python docs/scripts/tool-esp.py monitor -p COM7  # or name it
+python docs/scripts/tool-esp.py size             # flash and RAM budget
 ```
 
-`flash` stays attached afterwards — the boot log is what says whether it
-worked. Leave `--port` off and esptool picks the port itself.
+**With no command at all** it builds, flashes and monitors in one go, finding
+the serial port itself. One port on the machine is used and named; none, or
+more than one, is an error listing what it saw — guessing between two boards is
+how firmware lands on the wrong one.
+
+`flash` stays attached afterwards: the boot log is what says whether it worked.
 
 ## Layout
 

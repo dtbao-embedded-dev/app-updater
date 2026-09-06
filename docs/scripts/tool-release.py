@@ -263,7 +263,9 @@ def merge_pr(head: str, base: str, version: str) -> None:
         print(f"    opened PR {head} -> {base}")
     # --merge, never --squash: the tag has to land on the release commit, and a
     # squash would leave that commit out of main entirely.
-    gh("pr", "merge", head, "--merge", "--delete-branch=false")
+    # No --delete-branch: developing and the release branch both outlive the
+    # release, and gh does not delete unless asked.
+    gh("pr", "merge", head, "--merge")
     print(f"    merged {head} -> {base}")
 
 

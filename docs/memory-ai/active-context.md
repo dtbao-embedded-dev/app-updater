@@ -9,11 +9,22 @@ updated: 2026-09-06
 
 ## Current focus
 
-CI runs and the firmware compiles. What is left untested is everything that
-needs the two things a CI runner does not have: **a board** and **a tag**.
-Nothing boots yet, and `release.yml` has never executed.
+`v0.1.0` is out. Every automated path — build, test, sanitizers, analysis,
+secret scan, release — has now been exercised for real.
+
+**One thing has never happened: this code has never run on hardware.** That is
+the whole of what is left to find out, and it makes the BSP board table the
+next thing to touch, because its GPIO numbers are placeholders that may be
+wired to something else entirely.
 
 ## Recent changes
+
+- 2026-09-06 — **v0.1.0 released.** Cut with `docs/scripts/tool-release.py`:
+  seven phases, exit 0. `release.yml` ran for the first time and passed, both
+  gates holding. Tag `v0.1.0` is annotated, on `aff615f2`, an ancestor of
+  `main`; eight artifacts published. `main` was never pushed to directly.
+- 2026-09-06 — `tool-release.py` added: the release procedure as one command,
+  with a pre-flight that refuses before writing anything.
 
 - 2026-09-06 — First real CI run (34031391115): 4/6 green. Two genuine failures
   found and fixed — `-Wundef` cannot coexist with ESP-IDF's log headers, and
@@ -54,15 +65,15 @@ Nothing boots yet, and `release.yml` has never executed.
 
 ## Next steps
 
-1. Flash a real 0xF001 board. That is the only thing that can confirm
+1. Fill the BSP board table from the real 0xF001 schematic. Do this **before**
+   flashing: the current GPIO is a placeholder and may be wired to something
+   that does not like being driven.
+2. Flash and boot `v0.1.0`. That is the only thing that can confirm
    [data/flash-and-partitions.md](data/flash-and-partitions.md), which is still
    arithmetic rather than observation.
-2. Fill the BSP board table from the real schematic first — the current GPIO is
-   a placeholder and may be wired to something else.
 3. Run `spec-verify` and resolve or record what it finds.
-4. Then the self-test in `confirm_or_roll_back()`, the hole that matters most.
-5. `release.yml` stays unproven until a tag is pushed; consider a throwaway
-   pre-release tag on a branch to exercise it before it matters.
+4. Then the self-test in `confirm_or_roll_back()`, the hole that matters most —
+   it shipped in v0.1.0 and is named in that release's notes.
 
 ## Active decisions
 
@@ -77,5 +88,7 @@ Nothing boots yet, and `release.yml` has never executed.
   keeps `[Unreleased]` and the index only.
 - `main` is push-protected with no bypass actor. Every change into it goes
   through a pull request from `developing`, self-merged (0 approvals required).
-- No git tag exists. `v0.1.0` is a changelog file and a `VERSION` string, not a
-  release.
+- New work goes on `developing`. `release/v0.1` did its job and is closed; the
+  next release cuts a fresh `release/*` branch.
+- The route to `main` is `release/*` → `developing` → `main`, merged and never
+  squashed, because the tag has to land on a commit that survives on `main`.

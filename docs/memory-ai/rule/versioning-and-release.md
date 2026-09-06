@@ -79,14 +79,23 @@ unit".
 
 ## Current state
 
-`VERSION` holds `0.1.0` and the root `CHANGELOG.md` carries every entry under
-`[Unreleased]`. **`docs/CHANGELOG/` does not exist**, because nothing has been
-released: the directory and its first file appear with the first tag.
+**`v0.1.0` is released.** Annotated tag `v0.1.0` on commit `aff615f2`, an
+ancestor of `main`, published with eight artifacts. `VERSION` holds `0.1.0`,
+`docs/CHANGELOG/v0.1.0.md` holds its notes, and the root `CHANGELOG.md` has an
+empty `[Unreleased]` plus one index row.
 
-**Nothing has been tagged.** `0.1.0` is a `VERSION` string, not a release. The
-open holes in [known-deviations.md](known-deviations.md) are the reason it has
-not been cut, and the release workflow would refuse the tag anyway until a
-changelog file is prepared for it.
+The whole procedure below ran through `tool-release.py` — commit, CI, two
+merged pull requests, tag, publish — and every gate held. **`main` has still
+never been pushed to directly.**
+
+What `v0.1.0` is *not*: a working updater. It is the scaffold, its contracts
+and its checks. The five holes in
+[known-deviations.md](known-deviations.md) shipped with it, and
+`docs/CHANGELOG/v0.1.0.md` lists them under `Known limitations` so anyone
+reading the release notes meets them before installing anything.
+
+The next version is cut the same way: write entries under `[Unreleased]` as the
+work happens, then run the script.
 
 ## See also
 

@@ -44,19 +44,25 @@ _Generated 2026-09-06 - 24 durable doc(s)._
   and fixed, not suppressed.
 - **The firmware compiles.** `idf.py build` completes in `espressif/idf:v6.1`:
   1090 targets, `app_updater.bin` 198 KB against a 1.875 MB slot, 90% free.
+- **v0.1.0 is released**, cut end to end by `tool-release.py`: seven phases, two
+  merged pull requests, an annotated tag on `main`, and eight published
+  artifacts. Both workflows green on the runs that produced it.
 
 ## What's left
 
-1. **A self-test in `confirm_or_roll_back()`** — the highest-value hole. Until
+1. **Fill the BSP board table from the 0xF001 schematic.** Its GPIO numbers are
+   placeholders; driving the wrong pin is how a first bring-up damages a board.
+2. **A self-test in `confirm_or_roll_back()`** — the highest-value hole. Until
    it exists, a broken image confirms itself and rollback never fires.
-2. `updater` `CHECKING` step: fetch the manifest, compare versions, decide.
-3. `updater` `DOWNLOADING` step: drive the fetch into the OTA write API, set the
+3. `updater` `CHECKING` step: fetch the manifest, compare versions, decide.
+4. `updater` `DOWNLOADING` step: drive the fetch into the OTA write API, set the
    boot partition.
-4. Network bring-up (Wi-Fi or Ethernet) — not in this repo at all.
-5. Real board values in the BSP table, from the 0xF001 schematic.
-6. An **on-target** smoke test. The host suite runs; nothing exercises a board.
-7. Record migration in `storage`, before any field release.
-8. Enable `gcc -fanalyzer` — deferred on purpose, not forgotten. The trigger is
+5. Network bring-up (Wi-Fi or Ethernet) — not in this repo at all.
+6. **Flash and boot v0.1.0 on real hardware.** Nothing has ever executed on a
+   board, so everything about the flash layout is still arithmetic.
+7. An **on-target** smoke test. The host suite runs; nothing exercises a board.
+8. Record migration in `storage`, before any field release.
+9. Enable `gcc -fanalyzer` — deferred on purpose, not forgotten. The trigger is
    the first code that does buffer arithmetic, parsing, or allocation; see
    [rule/static-analysis.md](rule/static-analysis.md) for the exact list and the
    two-line change it takes.
@@ -72,9 +78,9 @@ _Generated 2026-09-06 - 24 durable doc(s)._
 - ⚠ A test function that is not listed in `test/host/runner.c` compiles, links
   and never runs, with nothing going red to say so. The two lists must be kept
   in step by hand.
-- 🔴 **`release.yml` has never executed.** No tag has been pushed, so the
-  version gate, the artifact collection and `gh release create` are written
-  against documented behaviour, not observed behaviour. `ci.yml` has run.
+- ⚠ Everything now runs except the thing that matters most: **no code has ever
+  executed on a board.** The image builds, is published, and is byte-addressable
+  — and has never booted.
 - ⚠ The first build may fail on `-Wconversion`/`-Werror` in SDK macros expanded
   inside our translation units. That is the rule working; fix at the call site,
   never by silencing the warning.
@@ -87,11 +93,22 @@ _Generated 2026-09-06 - 24 durable doc(s)._
 
 ## Current focus
 
-CI runs and the firmware compiles. What is left untested is everything that
-needs the two things a CI runner does not have: **a board** and **a tag**.
-Nothing boots yet, and `release.yml` has never executed.
+`v0.1.0` is out. Every automated path — build, test, sanitizers, analysis,
+secret scan, release — has now been exercised for real.
+
+**One thing has never happened: this code has never run on hardware.** That is
+the whole of what is left to find out, and it makes the BSP board table the
+next thing to touch, because its GPIO numbers are placeholders that may be
+wired to something else entirely.
 
 ## Recent changes
+
+- 2026-09-06 — **v0.1.0 released.** Cut with `docs/scripts/tool-release.py`:
+  seven phases, exit 0. `release.yml` ran for the first time and passed, both
+  gates holding. Tag `v0.1.0` is annotated, on `aff615f2`, an ancestor of
+  `main`; eight artifacts published. `main` was never pushed to directly.
+- 2026-09-06 — `tool-release.py` added: the release procedure as one command,
+  with a pre-flight that refuses before writing anything.
 
 - 2026-09-06 — First real CI run (34031391115): 4/6 green. Two genuine failures
   found and fixed — `-Wundef` cannot coexist with ESP-IDF's log headers, and
@@ -132,15 +149,15 @@ Nothing boots yet, and `release.yml` has never executed.
 
 ## Next steps
 
-1. Flash a real 0xF001 board. That is the only thing that can confirm
+1. Fill the BSP board table from the real 0xF001 schematic. Do this **before**
+   flashing: the current GPIO is a placeholder and may be wired to something
+   that does not like being driven.
+2. Flash and boot `v0.1.0`. That is the only thing that can confirm
    [data/flash-and-partitions.md](data/flash-and-partitions.md), which is still
    arithmetic rather than observation.
-2. Fill the BSP board table from the real schematic first — the current GPIO is
-   a placeholder and may be wired to something else.
 3. Run `spec-verify` and resolve or record what it finds.
-4. Then the self-test in `confirm_or_roll_back()`, the hole that matters most.
-5. `release.yml` stays unproven until a tag is pushed; consider a throwaway
-   pre-release tag on a branch to exercise it before it matters.
+4. Then the self-test in `confirm_or_roll_back()`, the hole that matters most —
+   it shipped in v0.1.0 and is named in that release's notes.
 
 ## Active decisions
 
@@ -155,8 +172,10 @@ Nothing boots yet, and `release.yml` has never executed.
   keeps `[Unreleased]` and the index only.
 - `main` is push-protected with no bypass actor. Every change into it goes
   through a pull request from `developing`, self-merged (0 approvals required).
-- No git tag exists. `v0.1.0` is a changelog file and a `VERSION` string, not a
-  release.
+- New work goes on `developing`. `release/v0.1` did its job and is closed; the
+  next release cuts a fresh `release/*` branch.
+- The route to `main` is `release/*` → `developing` → `main`, merged and never
+  squashed, because the tag has to land on a commit that survives on `main`.
 
 
 ## Memory
@@ -448,7 +467,7 @@ the changelog headings. See
 - [../interface/tool-esp-cli.md](../interface/tool-esp-cli.md) — the wrapper that runs this build
 
 ### [architecture] CI and Release Pipeline
-*`architecture/ci-pipeline.md` - What GitHub Actions runs on a push and on a tag, in which container, and which gates can stop a release. - status: inferred - source: .github/workflows/ci.yml, .github/workflows/release.yml - keywords: GitHub Actions, ci.yml, release.yml, espressif/idf:v6.1, ctest, clang-format, clang-tidy, cppcheck, gitleaks, ASan, UBSan, gh release create, SHA256SUMS*
+*`architecture/ci-pipeline.md` - What GitHub Actions runs on a push and on a tag, in which container, and which gates can stop a release. - status: inferred - source: .github/workflows/ci.yml, .github/workflows/release.yml, docs/scripts/tool-release.py - keywords: GitHub Actions, ci.yml, release.yml, espressif/idf:v6.1, ctest, clang-format, clang-tidy, cppcheck, gitleaks, ASan, UBSan, gh release create, SHA256SUMS*
 
 # CI and Release Pipeline
 
@@ -457,7 +476,7 @@ the changelog headings. See
 🟢 **`ci.yml` has run.** First run (34031391115) went 4/6: `clang-format`, both
 host-test jobs and the secret scan passed on the first try; `firmware` and
 `analyse` failed, and both failures were real rather than cosmetic — see below.
-`release.yml` has **still never executed**, because no tag has been pushed.
+`release.yml` has now run too, once, and went green on its first attempt (34032701944) — both jobs, eight artifacts attached.
 
 Two things the first run taught, both now fixed:
 
@@ -468,6 +487,13 @@ Two things the first run taught, both now fixed:
 
 Both fixes were then verified by running the same commands in the same image
 locally before pushing again.
+
+**What the first `release.yml` run proved.** Both gates fired and let the tag
+through rather than being untested: the tag matched `VERSION`, and
+`docs/CHANGELOG/v0.1.0.md` existed because the release script had written it
+minutes earlier. The published assets are `app_updater.bin` (197,504 bytes),
+its `.elf` and `.map`, the bootloader, the partition table, `flash_args`, the
+size report, and a `SHA256SUMS` over all of them.
 
 ## CI — `.github/workflows/ci.yml`
 
@@ -1139,6 +1165,10 @@ Invoked as `python docs/scripts/tool-esp.py <command> [flags]`.
 # Release CLI (tool-release.py)
 
 > One command takes a `release/*` branch to a published tag, refusing at the first step that does not add up rather than half-way through.
+
+🟢 **Used for real.** `v0.1.0` was cut with it end to end — all seven phases,
+exit 0, no manual step. The ancestor check in phase 6 confirmed GitHub had
+merged rather than squashed, so the tag landed on the release commit itself.
 
 ## Contract
 
@@ -1890,14 +1920,23 @@ unit".
 
 ## Current state
 
-`VERSION` holds `0.1.0` and the root `CHANGELOG.md` carries every entry under
-`[Unreleased]`. **`docs/CHANGELOG/` does not exist**, because nothing has been
-released: the directory and its first file appear with the first tag.
+**`v0.1.0` is released.** Annotated tag `v0.1.0` on commit `aff615f2`, an
+ancestor of `main`, published with eight artifacts. `VERSION` holds `0.1.0`,
+`docs/CHANGELOG/v0.1.0.md` holds its notes, and the root `CHANGELOG.md` has an
+empty `[Unreleased]` plus one index row.
 
-**Nothing has been tagged.** `0.1.0` is a `VERSION` string, not a release. The
-open holes in [known-deviations.md](known-deviations.md) are the reason it has
-not been cut, and the release workflow would refuse the tag anyway until a
-changelog file is prepared for it.
+The whole procedure below ran through `tool-release.py` — commit, CI, two
+merged pull requests, tag, publish — and every gate held. **`main` has still
+never been pushed to directly.**
+
+What `v0.1.0` is *not*: a working updater. It is the scaffold, its contracts
+and its checks. The five holes in
+[known-deviations.md](known-deviations.md) shipped with it, and
+`docs/CHANGELOG/v0.1.0.md` lists them under `Known limitations` so anyone
+reading the release notes meets them before installing anything.
+
+The next version is cut the same way: write entries under `[Unreleased]` as the
+work happens, then run the script.
 
 ## See also
 
@@ -1926,13 +1965,13 @@ this repo does not match the standard.
 | 3 | LOG doc prose | No `LOG_E`/`LOG_W`/`LOG_I` wrapper; the SDK log macros are used directly with the module `TAG` | A wrapper usable by `driver/bsp/` would have to sit below the driver layer, which is exactly where the SDK's own logging already sits. Every numbered LOG rule still holds. |
 | 4 | `R-RPO-09` tree | No `third_party/`; `test/` holds only the host harness, no on-target test | Nothing to put in `third_party/` yet. The on-target smoke test is missing, which is a hole rather than a departure — see below. |
 | 5 | naming | The project-wide status is `fw_err_t`, not the `updater_err_t` first proposed | `updater_err_t` would collide with the `updater` module's symbol prefix, and a grep for a prefix must land in exactly one place. `fw_err_t` is the standard's own name for the app-wide type. |
-| 6 | `R-VER-13` | Once anything is released, the changelog splits one-file-per-version under `docs/CHANGELOG/`; the root `CHANGELOG.md` keeps `[Unreleased]` plus an index. Nothing is released yet, so that directory does not exist | User decision. The standard wants one newest-first file, so a reader or tool looking for "what changed in 0.1.0" no longer finds it in the conventional place. The index table is what keeps the trail followable. |
+| 6 | `R-VER-13` | Once anything is released, the changelog splits one-file-per-version under `docs/CHANGELOG/`; the root `CHANGELOG.md` keeps `[Unreleased]` plus an index. In use since v0.1.0 | User decision. The standard wants one newest-first file, so a reader or tool looking for "what changed in 0.1.0" no longer finds it in the conventional place. The index table is what keeps the trail followable. |
 
 ## Open holes (must be empty before a field release)
 
 | # | Where | Hole | Consequence if shipped |
 |---|-------|------|------------------------|
-| 1 | `app.c`, `confirm_or_roll_back()` | `SPEC-DEVIATION(R-VER-08)` — the new image confirms itself with **no self-test** | A broken image marks itself valid and rollback never fires. This defeats the product's whole reason to exist. |
+| 1 | `app.c`, `confirm_or_roll_back()` | `SPEC-DEVIATION(R-VER-08)` — the new image confirms itself with **no self-test** | A broken image marks itself valid and rollback never fires. This defeats the product's whole reason to exist. **Shipped in v0.1.0**, listed in that release's notes. |
 | 2 | `updater.c`, `step_checking()` | Not implemented — never finds an update | The updater never updates. Fails safe, but does nothing. |
 | 3 | `updater.c`, `step_downloading()` | Not implemented | Unreachable today. |
 | 4 | `storage.c`, `record_validate()` | No migration between record versions | Adding a field silently costs every deployed unit its stored settings. |
@@ -1947,8 +1986,8 @@ Two more, outside the source:
   every peripheral once and prints a verdict is the last gate before a release
   tag (R-TST-10), and it does not exist. The host suite runs and is enforced in
   CI — see [testing.md](testing.md).
-- **Neither GitHub Actions workflow has ever run.** They are written against
-  documented behaviour, not observed behaviour.
+- Both GitHub Actions workflows have now run green, so this list is the only
+  thing between the repo and a release that means something.
 
 ## The rule
 

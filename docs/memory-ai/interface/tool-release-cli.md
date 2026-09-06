@@ -14,6 +14,10 @@ keywords: tool-release.py, --dry-run, --summary, --yes, chore(release), release 
 
 > One command takes a `release/*` branch to a published tag, refusing at the first step that does not add up rather than half-way through.
 
+🟢 **Used for real.** `v0.1.0` was cut with it end to end — all seven phases,
+exit 0, no manual step. The ancestor check in phase 6 confirmed GitHub had
+merged rather than squashed, so the tag landed on the release commit itself.
+
 ## Contract
 
 ```text

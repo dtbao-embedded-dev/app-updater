@@ -35,6 +35,12 @@ import sys
 import time
 from pathlib import Path
 
+# A Windows console defaults to cp1252 and mangles the em dash this script
+# prints back from the changelog. The files it writes are utf-8 either way;
+# this is only so the preview a developer reads matches what lands on disk.
+if sys.stdout.encoding and sys.stdout.encoding.lower().replace("-", "") != "utf8":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 REPO = Path(__file__).resolve().parents[2]
 REPO_URL = "https://github.com/dtbao-embedded-dev/app-updater"
 

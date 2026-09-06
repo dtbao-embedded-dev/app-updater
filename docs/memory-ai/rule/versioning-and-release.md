@@ -14,6 +14,18 @@ keywords: VERSION, PROJECT_VER, CHANGELOG.md, docs/CHANGELOG, SemVer, Unreleased
 
 > One number in one file; every other copy is derived from it, and the bump is the delivery step rather than paperwork after it.
 
+## Do it with the script
+
+```text
+python docs/scripts/tool-release.py <version> --summary "<one line>" --dry-run
+```
+
+`tool-release.py` performs every numbered step below in order and refuses at
+the first one that does not add up. Read the steps anyway — a script you do not
+understand is one you cannot debug at the moment it stops half-way. Its
+contract is in
+[../interface/tool-release-cli.md](../interface/tool-release-cli.md).
+
 ## When this applies
 
 Any change that ships, and any question of the form "what is running on that
@@ -54,6 +66,10 @@ unit".
    Pushing that tag runs `.github/workflows/release.yml`, which **refuses to
    publish** unless the tag matches `VERSION` and `docs/CHANGELOG/<tag>.md`
    exists. Steps 1-4 are therefore enforced, not merely documented.
+
+   `main` refuses a direct push, so the commit reaches it through
+   `release/*` → `developing` → `main`, merged rather than squashed so the
+   release commit survives to be tagged.
 6. Before tagging: rebuild and confirm the version the firmware reports is the
    one you typed. A mismatch means a copy escaped step 1.
 7. Record the flash and RAM figures with each release and compare them with the

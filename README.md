@@ -11,6 +11,12 @@ Recovery-side firmware for an ESP32-S3 product: it checks a manifest on a
 schedule, writes the new product image into the `app_firmware` slot, and lets
 the bootloader confirm it or roll back on the next boot.
 
+It also answers a **USB command channel** - a CDC-ACM serial port at VID
+`0xA331` / PID `0xF001` - so a PC on a bench can read the unit, push an image
+into `app_firmware` and arm it, without a network. See
+[docs/memory-ai/behavior/usb-host-flow.md](docs/memory-ai/behavior/usb-host-flow.md)
+for the sequence, and `python docs/scripts/tool-usb.py --help` for the tool.
+
 - **Target**: ESP32-S3, ESP-IDF **v6.1**, C11 (`-std=gnu11`)
 - **Version**: 0.1.0 — see [CHANGELOG.md](CHANGELOG.md)
 
@@ -89,9 +95,12 @@ application/       what the product does — no register, no pin
 middleware/        protocol and storage, product-agnostic
   fw/              the project-wide status code, fw_err_t
   ota_http/        fetches an image over HTTPS, chunk by chunk
+  protocol/        the USB wire format: frames, status codes, opcode map
+  command/         dispatches a decoded USB frame to its handler
   storage/         the persisted record, versioned and CRC-checked
 driver/
   bsp/             pin map, clock, flash geometry — the only pin numbers
+  usb_cdc/         the CDC-ACM byte pipe on USB-OTG (TinyUSB)
 workspace/0xF001/  build entry: CMakeLists, sdkconfig.defaults, partitions.csv
 test/host/         Unity runner + host fakes; the tests live with their modules
 docs/scripts/      developer commands (Python 3)
@@ -121,6 +130,12 @@ the first bring-up.
   fetch a replacement. **The cost: there is only one updater image, so the
   updater itself has no slot to roll back to.** A bad updater is a bad unit.
 - No `factory` partition — the bootloader never rolls back to one.
+- **One internal USB PHY, shared.** USB-OTG and USB-Serial-JTAG take turns on
+  GPIO19/20 and only one works at a time; the command channel claims it, so the
+  console and boot log are on **UART0** (GPIO43/44) and flashing over USB needs
+  the BOOT button. Do not burn `EFUSE_USB_PHY_SEL` — it is one-way.
+- The USB channel costs about **65.6 KB of static RAM** (two 32788-byte frame
+  buffers, measured with `tool-esp.py size`), which is 20.66 % of DRAM.
 - Network bring-up (Wi-Fi or Ethernet) is **not** in this repo. The updater
   assumes something else brought the interface up before a fetch runs.
 - `ota_http` reads the body into a 1 KB stack buffer, so the task that calls

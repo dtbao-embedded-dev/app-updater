@@ -1185,6 +1185,13 @@ installed still reports one.
 
 ## Behaviour worth knowing
 
+- **The screen is cleared on every run**, but only when stdout is a terminal.
+  In CI the escape codes would be noise in a log nobody can scroll back.
+- **The environment is resolved before the port is.** The other order was
+  written first and was wrong: a machine with no ESP-IDF installed and no board
+  plugged in reported "No serial port found", which is true and useless. The
+  port is never the interesting failure.
+
 - **It resolves the repo root from its own file location**, then points every
   `idf.py` at `workspace/0xF001`. The repo root has no `CMakeLists.txt`, so
   `idf.py build` typed at the root finds no project — that `-C` is the reason
@@ -1755,6 +1762,22 @@ step, a parser, a conversion, a status mapping.
 10. A new module's `test/` directory needs a copy of the `.clang-tidy` that
     already sits beside the existing tests — see
     [static-analysis.md](static-analysis.md).
+
+## The harness must not inherit the cross-compile environment
+
+Unity is found through `IDF_PATH`, and that is **all** the harness takes from
+ESP-IDF. Handing it the full exported environment breaks it: that environment
+puts `esp-clang` first on `PATH`, and CMake then tries to build the host tests
+with a cross compiler for the target. `tool-esp.py test` therefore passes the
+ambient environment plus `IDF_PATH`, nothing more.
+
+`IDF_PATH` is also normalised with `file(TO_CMAKE_PATH ...)` before use. On
+Windows it arrives with backslashes, and CMake reads `\.` and `
+` in a string
+as escapes - `E:\.espressif
+6.1\esp-idf` is a parse error, not a path. Linux
+never saw this, so CI stayed green while a Windows developer could not
+configure.
 
 ## Prove the test fails
 

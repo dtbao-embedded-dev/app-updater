@@ -31,9 +31,13 @@ get_filename_component(REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
 # build the firmware can run the tests with nothing extra installed. Override
 # with -DUNITY_DIR=<dir containing unity.c> for any other checkout.
 if(NOT UNITY_DIR)
+    # IDF_PATH arrives with backslashes on Windows, and CMake reads `\.` and
+    # `\v` in a string as escape sequences - `E:\.espressif\v6.1\esp-idf` is a
+    # parse error, not a path. TO_CMAKE_PATH is what makes it one.
+    file(TO_CMAKE_PATH "$ENV{IDF_PATH}" idf_path)
     foreach(candidate
-            "$ENV{IDF_PATH}/components/unity/unity/src"
-            "$ENV{IDF_PATH}/components/unity/unity")
+            "${idf_path}/components/unity/unity/src"
+            "${idf_path}/components/unity/unity")
         if(EXISTS "${candidate}/unity.c")
             set(UNITY_DIR "${candidate}")
             break()

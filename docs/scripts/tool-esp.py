@@ -97,13 +97,11 @@ def idf_root() -> Path:
     return root
 
 
-def idf_env(required: bool = True) -> dict[str, str]:
+def idf_env() -> dict[str, str]:
     """The environment idf.py needs.
 
-    `required=False` hands back the ambient environment instead of refusing
-    when ESP-IDF is unusable. The host tests want that: they only need ESP-IDF
-    to locate Unity, and a tree already configured with -DUNITY_DIR needs it
-    not at all. Refusing there would break a command that works.
+    This is for cross-compiling and nothing else. The host test build must not
+    use it - see run_tests().
 
     Exporting ESP-IDF does far more than set IDF_PATH: it puts the cross
     compiler, the python venv, cmake and ninja on PATH. Setting one variable
@@ -152,8 +150,6 @@ def idf_env(required: bool = True) -> dict[str, str]:
     # still died on a missing esp_idf_monitor.
     entry = Path(env.get("IDF_PATH", root)) / "tools" / "idf.py"
     if not entry.exists() or not env.get("IDF_PYTHON_ENV_PATH"):
-        if not required:
-            return dict(os.environ)
         detail = proc.stderr.strip()
         installer = root / ("install.bat" if os.name == "nt" else "install.sh")
         sys.exit(f"\nESP-IDF at {root} is not usable.\n\n"
@@ -163,8 +159,14 @@ def idf_env(required: bool = True) -> dict[str, str]:
     return env
 
 
-def export_name() -> str:
-    return "export.bat" if os.name == "nt" else "export.sh"
+def clear_screen() -> None:
+    """Start each run on a clean screen.
+
+    Only when attached to a terminal: in CI the escape codes are noise in a log
+    nobody can scroll back through anyway.
+    """
+    if sys.stdout.isatty():
+        os.system("cls" if os.name == "nt" else "clear")
 
 
 # --------------------------------------------------- serial port ---
@@ -195,9 +197,17 @@ def detect_port() -> str:
 
 # ------------------------------------------------------ commands ---
 
-def idf(args: list[str], port: str | None) -> int:
-    """Run idf.py against the 0xF001 workspace."""
+def idf(args: list[str], port: str | None, detect: bool = False) -> int:
+    """Run idf.py against the 0xF001 workspace.
+
+    `detect` asks for the port to be found, but only after the environment is
+    known good. Order matters: resolving the port first meant a machine with no
+    ESP-IDF installed and no board plugged in reported "No serial port found",
+    which is true and useless - the port was never the problem.
+    """
     env = idf_env()
+    if detect and not port:
+        port = detect_port()
     # Windows resolves an executable against the PARENT process PATH, not the
     # env= handed to the child, so bare `idf.py` is not found however correct
     # the exported PATH is. Going through the exported interpreter sidesteps
@@ -247,10 +257,16 @@ def run_tests() -> int:
     if not (out / "CMakeCache.txt").exists() and shutil.which("ninja"):
         configure += ["-G", "Ninja"]
 
-    # The harness finds Unity through IDF_PATH when it has to, but a tree
-    # already configured with -DUNITY_DIR does not need ESP-IDF at all - so
-    # this must not be the command that refuses to run without it.
-    env = idf_env(required=False)
+    # The harness needs exactly ONE thing from ESP-IDF - the path, so its
+    # CMakeLists can find Unity. Handing over the whole exported environment is
+    # actively wrong: that environment puts esp-clang first on PATH and CMake
+    # then tries to build the HOST tests with a cross compiler for the target.
+    # A tree already configured with -DUNITY_DIR needs none of this.
+    env = dict(os.environ)
+    if not env.get("IDF_PATH"):
+        configured = read_env_file()
+        if configured:
+            env["IDF_PATH"] = configured
     for step in (configure, ["cmake", "--build", str(out)]):
         print(" ".join(step), flush=True)
         rc = subprocess.call(step, env=env)
@@ -331,6 +347,7 @@ def main() -> int:
     parser.add_argument("--check", action="store_true",
                         help="format only: report instead of rewriting")
     args = parser.parse_args()
+    clear_screen()
 
     # A flag that does nothing is a flag someone will believe in. Reject rather
     # than ignore.
@@ -343,7 +360,7 @@ def main() -> int:
     if args.command is None:
         # The whole loop in one idf.py call: a second invocation would rebuild
         # nothing but would re-export the environment.
-        return idf(["build", "flash", "monitor"], args.port or detect_port())
+        return idf(["build", "flash", "monitor"], args.port, detect=True)
     if args.command == "format":
         return run_format(args.check)
     if args.command == "test":
@@ -352,9 +369,9 @@ def main() -> int:
         return run_analyse()
     if args.command == "flash":
         # Flash and stay attached: the boot log is what says whether it worked.
-        return idf(["flash", "monitor"], args.port or detect_port())
+        return idf(["flash", "monitor"], args.port, detect=True)
     if args.command == "monitor":
-        return idf(["monitor"], args.port or detect_port())
+        return idf(["monitor"], args.port, detect=True)
     if args.command == "size":
         # R-BLD-04: the number nobody looks at is the number that runs out.
         return idf(["size", "size-components"], None)

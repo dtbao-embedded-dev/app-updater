@@ -50,6 +50,20 @@ step, a parser, a conversion, a status mapping.
     already sits beside the existing tests — see
     [static-analysis.md](static-analysis.md).
 
+## The harness must not inherit the cross-compile environment
+
+Unity is found through `IDF_PATH`, and that is **all** the harness takes from
+ESP-IDF. Handing it the full exported environment breaks it: that environment
+puts `esp-clang` first on `PATH`, and CMake then tries to build the host tests
+with a cross compiler for the target. `tool-esp.py test` therefore passes the
+ambient environment plus `IDF_PATH`, nothing more.
+
+`IDF_PATH` is also normalised with `file(TO_CMAKE_PATH ...)` before use. On
+Windows it arrives with backslashes, and CMake reads `\.` and `` in a string
+as escapes - `E:\.espressif6.1\esp-idf` is a parse error, not a path. Linux
+never saw this, so CI stayed green while a Windows developer could not
+configure.
+
 ## Prove the test fails
 
 A green suite is evidence of nothing until you have seen it go red. Before

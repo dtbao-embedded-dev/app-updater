@@ -75,6 +75,13 @@ installed still reports one.
 
 ## Behaviour worth knowing
 
+- **The screen is cleared on every run**, but only when stdout is a terminal.
+  In CI the escape codes would be noise in a log nobody can scroll back.
+- **The environment is resolved before the port is.** The other order was
+  written first and was wrong: a machine with no ESP-IDF installed and no board
+  plugged in reported "No serial port found", which is true and useless. The
+  port is never the interesting failure.
+
 - **It resolves the repo root from its own file location**, then points every
   `idf.py` at `workspace/0xF001`. The repo root has no `CMakeLists.txt`, so
   `idf.py build` typed at the root finds no project — that `-C` is the reason

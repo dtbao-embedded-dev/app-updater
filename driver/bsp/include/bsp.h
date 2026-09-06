@@ -23,6 +23,28 @@ extern "C" {
 /** A pin field set to this means the board does not wire that function. */
 #define BSP_GPIO_NONE (-1)
 
+/* The USB port and the console port, stated rather than implied.
+ *
+ * These four are constants, not rows of the board table, because no revision
+ * of any board can move them: they are fixed in ESP32-S3 silicon and are not
+ * routed through the GPIO matrix. Cited from the SDK rather than the datasheet
+ * so a reader can check them - `soc/usb_pins.h:10-11` and
+ * `soc/uart_pins.h:10-11` in the ESP-IDF checkout.
+ *
+ * The one thing worth knowing before probing a board: **the chip has a single
+ * internal USB PHY, time-division shared between USB-OTG and USB-Serial-JTAG**
+ * (TRM 32.3.1, 33.3.1). Both peripherals live on the same two pins and only
+ * one of them can drive them at a time. This firmware gives the PHY to
+ * USB-OTG, because that is the only way to enumerate with our own VID and PID
+ * (`USB_CDC_VID` / `USB_CDC_PID` in `driver/usb_cdc`) - USB-Serial-JTAG's
+ * `303A:1001` is fixed in ROM. So USB-Serial-JTAG is off once the app is
+ * running, and the console and boot log are on UART0 instead. */
+#define BSP_USB_DP_GPIO 20 /**< USB D+, internal PHY, fixed in silicon.    */
+#define BSP_USB_DM_GPIO 19 /**< USB D-, internal PHY, fixed in silicon.    */
+
+#define BSP_CONSOLE_UART_TX_GPIO 43 /**< UART0 TXD - the boot log leaves here. */
+#define BSP_CONSOLE_UART_RX_GPIO 44 /**< UART0 RXD.                            */
+
 /* -------------------------------- Types -------------------------------- */
 
 /**

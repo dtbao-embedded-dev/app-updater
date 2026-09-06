@@ -39,3 +39,33 @@ CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_ENABLE=y
 # costs no flash and evaluates no arguments. Default level is what ships.
 CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# The console is on UART0, NOT on USB.
+#
+# ESP32-S3 has one internal USB PHY, time-division shared between USB-OTG and
+# USB-Serial-JTAG - only one works at a time (TRM 32.3.1 and 33.3.1). The
+# TinyUSB stack switches that PHY to USB-OTG during its own install, which
+# turns USB-Serial-JTAG off, so a log left there would go silent the moment
+# the command channel came up. UART0 keeps the boot banner readable before USB
+# is even mounted, which is the whole reason the banner exists.
+#
+# The cost, accepted: no USB auto-download reset any more. Flash over UART0
+# with a bridge, or over USB with the BOOT button held. Do NOT burn
+# EFUSE_USB_PHY_SEL to "fix" this - it is one-way and takes USB-Serial-JTAG
+# download away in the bootloader too, not just in the app.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+
+# esp_tinyusb ships CDC off by default and its header refuses to compile
+# without this (`#error "TinyUSB CDC driver must be enabled in menuconfig"`).
+# One channel is all the command protocol needs; the FIFO sizes are the
+# component's defaults, and the 512-byte RX FIFO is the one the protocol's
+# "send one command and wait" rule exists to respect.
+CONFIG_TINYUSB_CDC_ENABLED=y
+CONFIG_TINYUSB_CDC_COUNT=1
+
+# No secondary console either. ESP-IDF defaults the secondary console to
+# USB-Serial-JTAG, which mirrors the log onto exactly the peripheral this
+# firmware takes the PHY away from - so every log line after usb_cdc_init()
+# would be written to a peripheral with no PHY behind it. Turning it off keeps
+# one log on one cable and removes the question entirely.
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y

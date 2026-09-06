@@ -9,6 +9,9 @@ the part nobody remembers.
     python docs/scripts/tool-esp.py build
     python docs/scripts/tool-esp.py flash [-p COM7]
     python docs/scripts/tool-esp.py monitor [-p COM7]
+    python docs/scripts/tool-esp.py erase-flash [-p COM7]
+    python docs/scripts/tool-esp.py erase-flash --address 0x19000 --size 0x4000
+    python docs/scripts/tool-esp.py erase-flash --address 0x220000 --size all
     python docs/scripts/tool-esp.py size
     python docs/scripts/tool-esp.py merge                one image, flashed at 0x0
     python docs/scripts/tool-esp.py clean
@@ -33,6 +36,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -45,9 +49,13 @@ ENV_FILE = REPO / ".env.esp"
 
 # Commands that talk to a board, so a port is meaningful. Everything else
 # rejects -p rather than accepting it and quietly doing nothing with it.
-PORT_COMMANDS = ("flash", "monitor")
-IDF_COMMANDS = ("build", "flash", "monitor", "size", "clean", "menuconfig", "merge")
+PORT_COMMANDS = ("flash", "monitor", "erase-flash")
+IDF_COMMANDS = ("build", "flash", "monitor", "size", "clean", "menuconfig", "merge",
+                "erase-flash")
 VERSION_FILE = REPO / "VERSION"
+
+# Flash erases a sector at a time; a partial erase has to line up with one.
+SECTOR_SIZE = 0x1000
 
 ENV_TEMPLATE = """# Where ESP-IDF lives on THIS machine.
 #
@@ -203,6 +211,59 @@ def detect_port() -> str:
 
 # ------------------------------------------------------ commands ---
 
+def configured_flash_bytes() -> int:
+    """Total flash, from the one knob that already decides it.
+
+    `--size all` has to know where the chip ends, and R-BLD-05 says that number
+    lives in sdkconfig.defaults next to the partition table it is checked
+    against. Reading it back is how this stays one number rather than two that
+    agree until someone edits one.
+    """
+    text = (WORKSPACE / "sdkconfig.defaults").read_text(encoding="utf-8")
+    found = re.search(r"^CONFIG_ESPTOOLPY_FLASHSIZE_(\d+)MB=y", text, re.M)
+    if not found:
+        sys.exit(f"{WORKSPACE / 'sdkconfig.defaults'} sets no "
+                 f"CONFIG_ESPTOOLPY_FLASHSIZE_*MB, so `--size all` has no end "
+                 f"to erase up to.")
+    return int(found.group(1)) * 1024 * 1024
+
+
+def venv_python(env: dict[str, str]) -> str:
+    """The interpreter from ESP-IDF's own virtual environment.
+
+    Windows resolves an executable against the PARENT process PATH, not the
+    env= handed to the child, so bare `idf.py` is not found however correct the
+    exported PATH is. Going through the exported interpreter sidesteps both that
+    and the .py / PATHEXT association. It has to be ESP-IDF's own environment: a
+    system python cannot import esp_idf_monitor or esptool. idf_env() has
+    already refused if that environment is missing.
+    """
+    venv_bin = Path(env["IDF_PYTHON_ENV_PATH"]) / ("Scripts" if os.name == "nt" else "bin")
+    return (shutil.which("python", path=str(venv_bin))
+            or shutil.which("python", path=env["PATH"])
+            or sys.executable)
+
+
+def esptool(args: list[str], port: str | None, detect: bool = False) -> int:
+    """Run esptool directly, for the one thing idf.py cannot do.
+
+    idf.py offers erase-flash and erase-otadata and nothing in between, so a
+    partial erase has no route through it. The chip is left to esptool's own
+    detection rather than named here: CONFIG_IDF_TARGET in sdkconfig.defaults
+    is the single source of truth and this must not become a second one.
+    """
+    env = idf_env()
+    if detect and not port:
+        port = detect_port()
+
+    cmd = [venv_python(env), "-m", "esptool"]
+    if port:
+        cmd += ["--port", port]
+    cmd += args
+    print("esptool", " ".join(cmd[3:]), flush=True)
+    return subprocess.call(cmd, env=env)
+
+
 def idf(args: list[str], port: str | None, detect: bool = False) -> int:
     """Run idf.py against the 0xF001 workspace.
 
@@ -214,20 +275,9 @@ def idf(args: list[str], port: str | None, detect: bool = False) -> int:
     env = idf_env()
     if detect and not port:
         port = detect_port()
-    # Windows resolves an executable against the PARENT process PATH, not the
-    # env= handed to the child, so bare `idf.py` is not found however correct
-    # the exported PATH is. Going through the exported interpreter sidesteps
-    # both that and the .py / PATHEXT association.
-    # The interpreter has to be the one from ESP-IDF's own virtual environment;
-    # a system python cannot import esp_idf_monitor. idf_env() has already
-    # refused if that environment is missing.
-    venv_bin = Path(env["IDF_PYTHON_ENV_PATH"]) / ("Scripts" if os.name == "nt" else "bin")
-    python = (shutil.which("python", path=str(venv_bin))
-              or shutil.which("python", path=env["PATH"])
-              or sys.executable)
     entry = Path(env["IDF_PATH"]) / "tools" / "idf.py"
 
-    cmd = [python, str(entry), "-C", str(WORKSPACE)]
+    cmd = [venv_python(env), str(entry), "-C", str(WORKSPACE)]
     if port:
         cmd += ["-p", port]
     cmd += args
@@ -373,6 +423,13 @@ def main() -> int:
     parser.add_argument("-p", "--port",
                         help=f"serial port, e.g. COM7. Only for: "
                              f"{', '.join(PORT_COMMANDS)}, or no command")
+    parser.add_argument("--address",
+                        help="erase-flash only: start of the region to erase, "
+                             "e.g. 0x19000. Erases the whole chip when omitted")
+    parser.add_argument("--size",
+                        help="erase-flash only: bytes to erase, e.g. 0x4000, "
+                             "or `all` for everything from --address to the end "
+                             "of the flash")
     parser.add_argument("--check", action="store_true",
                         help="format only: report instead of rewriting")
     parser.add_argument("--sanitize", action="store_true",
@@ -385,6 +442,31 @@ def main() -> int:
     if args.port and args.command not in (None, *PORT_COMMANDS):
         parser.error(f"-p/--port means nothing for `{args.command}`; it applies "
                      f"to {', '.join(PORT_COMMANDS)} or to no command at all")
+    if (args.address or args.size) and args.command != "erase-flash":
+        parser.error("--address/--size apply to `erase-flash` only")
+    if bool(args.address) != bool(args.size):
+        parser.error("--address and --size go together; one without the other "
+                     "would erase a length or a place nobody named")
+    region = None
+    if args.address:
+        try:
+            start = int(args.address, 0)
+            length = (configured_flash_bytes() - start if args.size == "all"
+                      else int(args.size, 0))
+        except ValueError:
+            parser.error("--address and --size must be integers, decimal or "
+                         "0x-prefixed hex; --size also takes `all`")
+        if length <= 0:
+            parser.error(f"--address {args.address} is at or past the end of "
+                         f"the {configured_flash_bytes() // (1024 * 1024)} MB "
+                         f"flash sdkconfig.defaults configures")
+        region = [start, length]
+        # esptool refuses an unaligned region, and so should we, one step
+        # earlier and naming why: flash erases a 4 KB sector at a time, so a
+        # region that starts or ends mid-sector would take a neighbour with it.
+        if any(v % SECTOR_SIZE for v in region):
+            parser.error(f"--address and --size must be multiples of "
+                         f"{SECTOR_SIZE:#x} (the flash sector)")
     if args.check and args.command != "format":
         parser.error("--check applies to `format` only")
     if args.sanitize and args.command != "test":
@@ -405,6 +487,14 @@ def main() -> int:
         return idf(["flash", "monitor"], args.port, detect=True)
     if args.command == "monitor":
         return idf(["monitor"], args.port, detect=True)
+    if args.command == "erase-flash":
+        # Whole chip through idf.py; a named region through esptool, which is
+        # the only one of the two that can do it. Either way this takes nvs,
+        # otadata or whatever else lives there, and nothing here puts it back.
+        if region is None:
+            return idf(["erase-flash"], args.port, detect=True)
+        return esptool(["erase-region", *(f"{v:#x}" for v in region)],
+                       args.port, detect=True)
     if args.command == "size":
         # R-BLD-04: the number nobody looks at is the number that runs out.
         return idf(["size", "size-components"], None)

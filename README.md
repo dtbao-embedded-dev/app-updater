@@ -58,7 +58,20 @@ python docs/scripts/tool-esp.py                  # build + flash + monitor
 python docs/scripts/tool-esp.py flash            # port found for you
 python docs/scripts/tool-esp.py monitor -p COM7  # or name it
 python docs/scripts/tool-esp.py size             # flash and RAM budget
+
+python docs/scripts/tool-esp.py erase-flash                       # whole chip
+python docs/scripts/tool-esp.py erase-flash --address 0x19000 --size 0x4000
+python docs/scripts/tool-esp.py erase-flash --address 0x220000 --size all
 ```
+
+`erase-flash` finds the port like the other board commands, so with one board
+plugged in it needs no argument — and it erases that board with no confirmation
+step. `--address`/`--size` narrow it to a single region (sector multiples only);
+`--size all` runs from that address to the end of the flash.
+
+A partition-table change needs the whole-chip form: move a partition and the old
+`otadata` is left at an offset the new table calls something else, so the
+bootloader reads a slot selection out of whatever happens to be there.
 
 **With no command at all** it builds, flashes and monitors in one go, finding
 the serial port itself. One port on the machine is used and named; none, or

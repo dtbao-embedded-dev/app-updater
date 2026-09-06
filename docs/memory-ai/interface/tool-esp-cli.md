@@ -7,7 +7,7 @@ status: active
 updated: 2026-09-06
 source: docs/scripts/tool-esp.py, .env.esp
 confidence: confirmed
-keywords: tool-esp.py, .env.esp, IDF_PATH, IDF_PYTHON_ENV_PATH, MSYSTEM, build, flash, monitor, size, clean, menuconfig, format, test, analyse, --port, --check, UNITY_DIR, port detection
+keywords: tool-esp.py, .env.esp, IDF_PATH, IDF_PYTHON_ENV_PATH, MSYSTEM, build, flash, monitor, erase-flash, size, clean, menuconfig, format, test, analyse, --port, --check, UNITY_DIR, port detection
 ---
 
 # Developer CLI (tool-esp.py)
@@ -26,6 +26,8 @@ invocation, with the port detected.
 | `build` | `idf.py -C workspace/0xF001 build` | |
 | `flash` | `idf.py -C … flash monitor` | Deliberately fused: the boot log is what says whether it worked |
 | `monitor` | `idf.py -C … monitor` | |
+| `erase-flash` | `idf.py -C … erase-flash` | Whole chip. Port detected like the others |
+| `erase-flash --address A --size N` | `esptool --port … erase-region A N` | One region. Goes through esptool: idf.py has erase-flash and erase-otadata and nothing in between |
 | `size` | `idf.py -C … size size-components` | Fused so the per-component breakdown is never skipped |
 | `clean` | `idf.py -C … clean` | |
 | `menuconfig` | `idf.py -C … menuconfig` | |
@@ -37,9 +39,27 @@ invocation, with the port detected.
 
 | Flag | Applies to | Meaning |
 |------|-----------|---------|
-| `-p` / `--port` | `flash`, `monitor`, no command | Serial port, e.g. `COM7`. Omit and it is detected. |
+| `-p` / `--port` | `flash`, `monitor`, `erase-flash`, no command | Serial port, e.g. `COM7`. Omit and it is detected. |
+| `--address` / `--size` | `erase-flash` | Region to erase, decimal or `0x` hex. Both or neither; both must be multiples of `0x1000`. `--size all` means “to the end of the flash” |
 | `--check` | `format` | Report instead of rewriting |
 | `--sanitize` | `test` | ASan + UBSan, into a separate `build/san` tree |
+
+**`erase-flash` detects the port like every other port command, and it is
+destructive.** With no `-p` it erases whichever single board is plugged in,
+with no confirmation step, and nothing puts back the nvs and otadata it takes.
+Name the port when more than a bench with one board is involved.
+
+`--address`/`--size` narrow it to a region — `--address 0x19000 --size 0x4000`
+clears `cfg_setting` and leaves the rest alone. Both must be sector multiples;
+an unaligned region is refused here rather than in esptool, because a region
+that starts or ends mid-sector would take a neighbouring partition with it.
+
+`--size all` erases from `--address` to the end of the flash, which is read
+back from `CONFIG_ESPTOOLPY_FLASHSIZE_*MB` in `sdkconfig.defaults` rather than
+written into the script — the same knob the partition table is checked
+against, so the two cannot drift. `--address 0x220000 --size all` clears
+`app_firmware` and nothing before it. An address at or past the end of the
+configured flash is refused, naming the size it was measured against.
 
 **A flag that does not apply is rejected, not ignored.** `format -p COM7` and
 `build --check` both exit 2 with a message naming what the flag is for. A flag

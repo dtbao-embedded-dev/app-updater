@@ -7,7 +7,7 @@ status: active
 updated: 2026-09-06
 source: application/app/src/app.c:64-174, application/app/src/app.c:195-210
 confidence: confirmed
-keywords: app_main, app_run, bring_up_storage, bring_up_bsp, bring_up_updater, confirm_or_roll_back, on_updater_state, now_ms, APP_TICK_MS
+keywords: app_main, app_run, print_banner, APP_GIT_COMMIT, bring_up_storage, bring_up_bsp, bring_up_updater, confirm_or_roll_back, on_updater_state, now_ms, APP_TICK_MS
 ---
 
 # Boot and Bring-Up
@@ -16,8 +16,12 @@ keywords: app_main, app_run, bring_up_storage, bring_up_bsp, bring_up_updater, c
 
 ## What it does
 
-1. Log identity: project name, version and IDF version, read from the image
-   header. A unit that cannot say what it runs cannot be debugged.
+1. **Print the banner** (`print_banner`): project name, version, git commit,
+   build date and time, IDF version, chip model and revision, feature bits,
+   core count, CPU clock and the Wi-Fi station MAC. A unit that cannot say
+   what it runs cannot be debugged. It uses `printf`, not `ESP_LOGI`, so it
+   carries no level, tag or timestamp and no log-level setting can filter it
+   away. See the note below on what it duplicates.
 2. **Confirm or roll back**, before anything that could make the decision
    impossible. See below.
 3. Zero the one application context struct that owns every module's instance.
@@ -33,6 +37,25 @@ keywords: app_main, app_run, bring_up_storage, bring_up_bsp, bring_up_updater, c
 
 Each bring-up step returns early on failure with the failure logged; nothing
 starts until every module is up.
+
+## The banner overlaps ESP-IDF's own
+
+ESP-IDF logs an *Application information* block of its own just before
+`app_main()`, from `esp_app_desc.c` under tag `app_init`: project name, app
+version, compile time, ELF SHA256 and IDF version. Four of those lines say the
+same thing the banner says, so a boot log shows both.
+
+What the banner adds that ESP-IDF's block does not have: the **git commit**,
+the **chip model, revision and features**, the **core count and clock**, and
+the **MAC**. Suppressing IDF's block is not free — the `CONFIG_APP_EXCLUDE_*`
+options strip the fields from the image rather than only from the log, which
+would empty the banner too.
+
+`APP_GIT_COMMIT` is the full 40-character hash from `git rev-parse HEAD`, run by
+`application/app/CMakeLists.txt` at **CMake configure time**, as a PRIVATE
+compile definition so the vendor SDK never sees it. It therefore names the
+commit the build tree was last configured on, not necessarily the one checked
+out now, and falls back to `"unknown"` where git is unavailable.
 
 ## Confirm or roll back
 

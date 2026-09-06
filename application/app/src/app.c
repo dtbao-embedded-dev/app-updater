@@ -17,7 +17,9 @@
 #include "updater.h"
 
 #include "esp_app_desc.h"
+#include "esp_chip_info.h"
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 #include "esp_timer.h"
@@ -25,10 +27,20 @@
 #include "freertos/task.h"
 #include "nvs_flash.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 /* --------------------------- Private macros ---------------------------- */
+
+/* Set by this component's CMakeLists from `git rev-parse`. It is read at
+ * CONFIGURE time, so it goes stale until CMake runs again - a banner may
+ * name the commit the build tree was configured on, not the one checked out
+ * now. Good enough to identify a field unit's image; not evidence in a
+ * bisect. */
+#ifndef APP_GIT_COMMIT
+#define APP_GIT_COMMIT "unknown"
+#endif
 
 /* ---------------------------- Private types ---------------------------- */
 
@@ -52,6 +64,7 @@ static app_ctx_t s_ctx;
 
 /* --------------------- Private function prototypes --------------------- */
 
+static void print_banner(void);
 static fw_err_t bring_up_storage(app_ctx_t *ctx);
 static fw_err_t bring_up_bsp(app_ctx_t *ctx);
 static fw_err_t bring_up_updater(app_ctx_t *ctx);
@@ -62,8 +75,7 @@ static uint32_t now_ms(void);
 /* -------------------------- Public functions --------------------------- */
 
 fw_err_t app_run(void) {
-    const esp_app_desc_t *desc = esp_app_get_description();
-    ESP_LOGI(TAG, "boot %s %s (idf %s)", desc->project_name, desc->version, desc->idf_ver);
+    print_banner();
 
     /* R-VER-08: decide the fate of a freshly flashed image before doing
      * anything that could make the decision impossible. */
@@ -114,6 +126,42 @@ void app_main(void) {
 /* -------------------------- Private functions -------------------------- */
 
 /* Arguments are checked at the public boundary (R-SRC-06); helpers assume it. */
+
+/* printf, not ESP_LOGI: this is the one block meant to be read by a person
+ * looking at a terminal, so it carries no level, tag or timestamp and is not
+ * filtered out by CONFIG_LOG_DEFAULT_LEVEL. */
+static void print_banner(void) {
+    const esp_app_desc_t *desc = esp_app_get_description();
+
+    esp_chip_info_t chip;
+    esp_chip_info(&chip);
+    const unsigned rev = chip.revision;
+
+    uint8_t mac[6] = {0};
+    (void)esp_read_mac(mac, ESP_MAC_WIFI_STA);
+
+    /* One product, one chip. A switch over esp_chip_model_t would trip
+     * -Wswitch-enum on every model this repo will never be built for. */
+    const char *model = (chip.model == CHIP_ESP32S3) ? "ESP32-S3" : "unknown";
+
+    printf("\n");
+    printf("Project name: %s\n", desc->project_name);
+    printf("Version:      v%s\n", desc->version);
+    printf("Commit hash:  %s\n", APP_GIT_COMMIT);
+    printf("Time build:   %s - %s\n", desc->date, desc->time);
+    printf("ESP-IDF:      %s\n", desc->idf_ver);
+    printf("Chip type:    %s (revision v%u.%u)\n", model, rev / 100U, rev % 100U);
+    printf("Features:     %s%s%s%s%u core%s, %u MHz\n",
+           (chip.features & CHIP_FEATURE_WIFI_BGN) ? "Wi-Fi, " : "",
+           (chip.features & CHIP_FEATURE_BLE) ? "BLE, " : "",
+           (chip.features & CHIP_FEATURE_BT) ? "BT, " : "",
+           (chip.features & CHIP_FEATURE_EMB_PSRAM) ? "embedded PSRAM, " : "", (unsigned)chip.cores,
+           (chip.cores > 1) ? "s" : "", (unsigned)CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
+    printf("MAC:          %02x:%02x:%02x:%02x:%02x:%02x\n", (unsigned)mac[0], (unsigned)mac[1],
+           (unsigned)mac[2], (unsigned)mac[3], (unsigned)mac[4], (unsigned)mac[5]);
+    printf("\n");
+    fflush(stdout);
+}
 
 static fw_err_t bring_up_storage(app_ctx_t *ctx) {
     esp_err_t nvs_err = nvs_flash_init();

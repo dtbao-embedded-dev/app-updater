@@ -1,0 +1,144 @@
+name: CI
+
+# The gates R-SAN asks for: the compiler first, then clang-tidy and cppcheck,
+# then the host suite under ASan/UBSan, plus a secret scan over the whole tree.
+on:
+  push:
+    branches: [main, developing, "release/**"]
+  pull_request:
+    branches: [main, developing]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned so CI and a developer's machine cannot disagree about what passes.
+  # Bumping either is a deliberate commit, not a drift.
+  CLANG_FORMAT_VERSION: "22.1.5"
+  CLANG_TIDY_VERSION: "22.1.8"
+  GITLEAKS_VERSION: "8.30.1"
+
+jobs:
+  format:
+    name: clang-format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Two clang-format releases disagree on real code, so an unpinned CI
+      # would reject what the pre-commit hook had just accepted - worse than
+      # having no check, because developers learn to ignore it.
+      - run: pip install "clang-format==${CLANG_FORMAT_VERSION}"
+      - run: python docs/scripts/tool-esp.py format --check
+
+  analyse:
+    name: cppcheck + clang-tidy
+    runs-on: ubuntu-latest
+    container: espressif/idf:v6.1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trust the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Install the analysers
+        run: |
+          apt-get update -qq && apt-get install -y -qq cppcheck
+          pip install --quiet "clang-tidy==${CLANG_TIDY_VERSION}"
+      # clang-tidy needs the exact compile flags, and the only build here that
+      # produces them for a compiler clang can parse is the host one - the
+      # firmware targets Xtensa, which upstream clang does not support. So
+      # clang-tidy covers the pure-logic modules and cppcheck covers the rest.
+      - name: Analyse
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          cmake -S test/host -B build/host
+          python docs/scripts/tool-esp.py analyse
+
+  host-tests:
+    name: host tests
+    runs-on: ubuntu-latest
+    container: espressif/idf:v6.1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trust the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Build and run the Unity suite
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          cmake -S test/host -B build/host
+          cmake --build build/host
+          ctest --test-dir build/host --output-on-failure
+
+  sanitizers:
+    name: host tests (ASan + UBSan)
+    runs-on: ubuntu-latest
+    container: espressif/idf:v6.1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trust the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      # R-SAN-08: undefined behaviour a target build hides - signed overflow, a
+      # misaligned access, a read past a buffer - surfaces here for free. The
+      # build traps rather than reporting, so UB is a red run, not a log line.
+      - name: Build and run instrumented
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          cmake -S test/host -B build/san -DSANITIZE=ON
+          cmake --build build/san
+          ctest --test-dir build/san --output-on-failure
+
+  # DEFERRED - gcc -fanalyzer. Verified clean on the current tree, deliberately
+  # not enabled: this codebase has no heap, no files and no buffer arithmetic,
+  # so the analyser has nothing to work on and would only produce noise.
+  # Add a job here, mirroring `sanitizers` with -DANALYZER=ON, as soon as the
+  # OTA write path, a manifest parser, or any malloc lands. Blocking from the
+  # first commit - an advisory analyser is one nobody reads.
+  # Reasoning and the exact trigger list: docs/memory-ai/rule/static-analysis.md
+
+  firmware:
+    name: build 0xF001
+    runs-on: ubuntu-latest
+    container: espressif/idf:v6.1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trust the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      # -Werror is applied per target by the build itself (R-BLD-01), so a
+      # warning in our code fails this step and a vendor warning does not.
+      - name: Build
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py -C workspace/0xF001 build
+      # R-BLD-04: the number nobody looks at is the number that runs out.
+      - name: Flash and RAM usage
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py -C workspace/0xF001 size
+
+  secrets:
+    name: secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # scan the history, not just the tip
+      # R-SAN-04: the whole tree, docs and scripts included. Wi-Fi credentials
+      # in an example config and a token in a test fixture are the two that
+      # actually happen. Installed from the pinned release rather than through
+      # an action, so nothing else runs with a token in scope.
+      - name: Install gitleaks
+        run: |
+          set -eu
+          url="https://github.com/gitleaks/gitleaks/releases/download"
+          curl -fsSL "${url}/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+      - name: Scan
+        run: gitleaks detect --source . --redact --verbose

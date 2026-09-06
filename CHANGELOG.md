@@ -10,7 +10,18 @@ below, and leaves a fresh empty `[Unreleased]` here.
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed
+- The published release artifacts could not flash a blank board. `flash_args`
+  named `ota_data_initial.bin`, which was never uploaded, and referred to the
+  bootloader and partition table by the directories they sit in inside
+  `build/` while the assets are flat. Both are fixed, and the release workflow
+  now fails if either recurs. **v0.1.0 is affected**; use the individual
+  offsets from its release notes, or the factory image from the next tag.
+
+### Added
+- Releases now carry a merged `app-updater-<tag>-factory.bin` that provisions a
+  blank board with one command at `0x0`, plus `ota_data_initial.bin` and the
+  `sdkconfig` that produced the image.
 
 ## Released
 

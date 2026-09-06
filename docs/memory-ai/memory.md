@@ -78,6 +78,9 @@ _Generated 2026-09-06 - 24 durable doc(s)._
 - ⚠ A test function that is not listed in `test/host/runner.c` compiles, links
   and never runs, with nothing going red to say so. The two lists must be kept
   in step by hand.
+- ⚠ **v0.1.0's published assets cannot flash a blank board** — see
+  [rule/known-deviations.md](rule/known-deviations.md). Fixed for the next tag;
+  the tag itself cannot be corrected.
 - ⚠ Everything now runs except the thing that matters most: **no code has ever
   executed on a board.** The image builds, is published, and is byte-addressable
   — and has never booted.
@@ -102,6 +105,11 @@ next thing to touch, because its GPIO numbers are placeholders that may be
 wired to something else entirely.
 
 ## Recent changes
+
+- 2026-09-06 — Found by reading v0.1.0's own assets back: the published set
+  could not flash a blank board. `release.yml` now ships a merged factory
+  image, `ota_data_initial.bin` and `sdkconfig`, flattens the `flash_args`
+  paths, and fails if either half of the defect returns.
 
 - 2026-09-06 — **v0.1.0 released.** Cut with `docs/scripts/tool-release.py`:
   seven phases, exit 0. `release.yml` ran for the first time and passed, both
@@ -488,6 +496,12 @@ Two things the first run taught, both now fixed:
 Both fixes were then verified by running the same commands in the same image
 locally before pushing again.
 
+**What the first run also hid.** It went green while publishing a set that
+could not flash anything: `flash_args` asked for `ota_data_initial.bin`, which
+was not uploaded, and named the other two by their `build/` subdirectories
+while the assets are flat. A green workflow is not a correct artifact — the
+gate above exists because nothing checked the output against itself.
+
 **What the first `release.yml` run proved.** Both gates fired and let the tag
 through rather than being untested: the tag matched `VERSION`, and
 `docs/CHANGELOG/v0.1.0.md` existed because the release script had written it
@@ -535,9 +549,18 @@ toolchain and the plain runner has the `gh` CLI.
      mismatch means one of the two is a typo, and shipping either is worse than
      shipping neither (R-VER-01).
    - Build, capture the size report.
-   - Collect into `dist/`: the app `.bin` / `.elf` / `.map`, the bootloader, the
-     partition table, the flash args, the size report, and a `SHA256SUMS` over
-     all of them.
+   - Collect into `dist/`, in three groups with different readers:
+
+     | Group | Files | For |
+     |-------|-------|-----|
+     | Provision a blank board | `app-updater-<tag>-factory.bin`, `bootloader.bin`, `partition-table.bin`, `ota_data_initial.bin`, `flash_args` | A bench. The factory image is one `esptool` write at `0x0`; the pieces are there for a partial reflash. |
+     | Update a board | `app_updater.bin` | The OTA payload the updater downloads |
+     | Diagnose one already in the field | `app_updater.elf`, `app_updater.map`, `sdkconfig`, `size-report.txt` | The `.elf` is the only thing that turns a panic backtrace into line numbers, and it must be the exact one that built the `.bin` |
+
+     Plus `SHA256SUMS` over all of them.
+   - **Gate:** every `.bin` named in `flash_args` must exist in `dist/`, and
+     none may still carry a directory path. v0.1.0 failed both halves of this
+     and nobody noticed until the assets were read back.
 2. **`publish`** (on `ubuntu-latest`)
    - **Gate:** `docs/CHANGELOG/<tag>.md` must exist. It should already, because
      an entry is written the day the change is made (R-VER-05); if it does not,
@@ -1975,6 +1998,7 @@ this repo does not match the standard.
 | 2 | `updater.c`, `step_checking()` | Not implemented — never finds an update | The updater never updates. Fails safe, but does nothing. |
 | 3 | `updater.c`, `step_downloading()` | Not implemented | Unreachable today. |
 | 4 | `storage.c`, `record_validate()` | No migration between record versions | Adding a field silently costs every deployed unit its stored settings. |
+| 5b | v0.1.0 assets | Its published files cannot flash a blank board: `ota_data_initial.bin` missing, `flash_args` paths not flat | Anyone provisioning from that release has to read the offsets out of the notes by hand. Fixed for the next tag; v0.1.0 itself cannot be changed, because a tag never moves. |
 | 5 | `bsp.c` board table | GPIO, polarity and flash size are placeholders, never checked against a schematic | The LED drives the wrong pin, or a pin that is wired to something else. |
 | 6 | `partitions.csv` | Only ONE updater image exists — the two app slots hold different programs | A bad updater has no slot to roll back to. See [../data/flash-and-partitions.md](../data/flash-and-partitions.md). |
 

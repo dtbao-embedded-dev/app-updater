@@ -50,8 +50,12 @@ ENV_FILE = REPO / ".env.esp"
 # Commands that talk to a board, so a port is meaningful. Everything else
 # rejects -p rather than accepting it and quietly doing nothing with it.
 PORT_COMMANDS = ("flash", "monitor", "erase-flash")
-IDF_COMMANDS = ("build", "flash", "monitor", "size", "clean", "menuconfig", "merge",
-                "erase-flash")
+# fullclean, not just clean: `clean` keeps the CMake cache, so a new component,
+# a new managed dependency or an edited sdkconfig.defaults is silently ignored -
+# the build reuses the configuration it already has. Deleting the build tree is
+# what workspace/0xF001/CMakeLists.txt says to do, and this is that command.
+IDF_COMMANDS = ("build", "flash", "monitor", "size", "clean", "fullclean", "menuconfig",
+                "merge", "erase-flash")
 VERSION_FILE = REPO / "VERSION"
 
 # Flash erases a sector at a time; a partial erase has to line up with one.

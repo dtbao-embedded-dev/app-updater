@@ -15,6 +15,15 @@
 
 #include <string.h>
 
+/* ------------------------ Public function prototypes ------------------- */
+
+/* The runner in test/host/runner.c calls these. Declaring them here is what
+ * satisfies -Wmissing-prototypes under the house warning set (R-BLD-01) --
+ * a test function is an external symbol like any other. */
+void test_fw_err_str_names_every_defined_code(void);
+void test_fw_err_only_ok_is_non_negative(void);
+void test_fw_err_str_rejects_an_unknown_code(void);
+
 /* -------------------------- Public functions --------------------------- */
 
 /* R-ERR-06: every defined code has a name. A code added to the enum without a

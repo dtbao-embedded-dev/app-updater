@@ -1,18 +1,18 @@
 ---
 title: Known Deviations and Open Holes
 category: rule
-order: 4
+order: 6
 purpose: Every place this repo departs from the house standard on purpose, plus the unfinished work that must not ship.
 status: active
 updated: 2026-09-06
-source: application/app/src/app.c:176-193, application/updater/src/updater.c:200-215, middleware/storage/src/storage.c:182-207, driver/bsp/src/bsp.c:22-33, conversation
+source: application/app/src/app.c:176-193, application/updater/src/updater.c:200-215, middleware/storage/src/storage.c:182-207, driver/bsp/src/bsp.c:22-33, CHANGELOG.md, conversation
 confidence: confirmed
 keywords: SPEC-DEVIATION, TODO, R-VER-08, R-RPO-06, R-RPO-01, gap, self-test, migration
 ---
 
 # Known Deviations and Open Holes
 
-> Five deliberate departures and five unfinished holes; the holes are the list that must be empty before a field release.
+> Six deliberate departures and six unfinished holes; the holes are the list that must be empty before a field release.
 
 ## When this applies
 
@@ -26,8 +26,9 @@ this repo does not match the standard.
 | 1 | `R-RPO-06` | Developer scripts live in `docs/scripts/`, not a repo-root `scripts/` | User decision. `spec-verify` will flag it. If it is to stay, change the standard rather than letting each repo drift. |
 | 2 | `R-RPO-01` | A `<mod>_priv.h` exists only in `application/app/` | The private header is the home for declarations shared across split parts; no module is split yet. The one that exists carries the `app_main` prototype that `-Wmissing-prototypes` demands. |
 | 3 | LOG doc prose | No `LOG_E`/`LOG_W`/`LOG_I` wrapper; the SDK log macros are used directly with the module `TAG` | A wrapper usable by `driver/bsp/` would have to sit below the driver layer, which is exactly where the SDK's own logging already sits. Every numbered LOG rule still holds. |
-| 4 | `R-RPO-09` tree | No `third_party/` and no repo-root `test/` | Nothing to put in either yet. Create them the day they have content. |
+| 4 | `R-RPO-09` tree | No `third_party/`; `test/` holds only the host harness, no on-target test | Nothing to put in `third_party/` yet. The on-target smoke test is missing, which is a hole rather than a departure — see below. |
 | 5 | naming | The project-wide status is `fw_err_t`, not the `updater_err_t` first proposed | `updater_err_t` would collide with the `updater` module's symbol prefix, and a grep for a prefix must land in exactly one place. `fw_err_t` is the standard's own name for the app-wide type. |
+| 6 | `R-VER-13` | Once anything is released, the changelog splits one-file-per-version under `docs/CHANGELOG/`; the root `CHANGELOG.md` keeps `[Unreleased]` plus an index. Nothing is released yet, so that directory does not exist | User decision. The standard wants one newest-first file, so a reader or tool looking for "what changed in 0.1.0" no longer finds it in the conventional place. The index table is what keeps the trail followable. |
 
 ## Open holes (must be empty before a field release)
 
@@ -38,13 +39,18 @@ this repo does not match the standard.
 | 3 | `updater.c`, `step_downloading()` | Not implemented | Unreachable today. |
 | 4 | `storage.c`, `record_validate()` | No migration between record versions | Adding a field silently costs every deployed unit its stored settings. |
 | 5 | `bsp.c` board table | GPIO, polarity and flash size are placeholders, never checked against a schematic | The LED drives the wrong pin, or a pin that is wired to something else. |
+| 6 | `partitions.csv` | Only ONE updater image exists — the two app slots hold different programs | A bad updater has no slot to roll back to. See [../data/flash-and-partitions.md](../data/flash-and-partitions.md). |
 
 Two more, outside the source:
 
 - Network bring-up (Wi-Fi or Ethernet) is not in this repo. The updater assumes
   something else brought the interface up before a fetch runs.
-- The two Unity test files have **no runner wired**. They are not in any
-  `SRCS`, so the firmware build passes without them — silently.
+- There is **no on-target test**. An on-target smoke test that boots, exercises
+  every peripheral once and prints a verdict is the last gate before a release
+  tag (R-TST-10), and it does not exist. The host suite runs and is enforced in
+  CI — see [testing.md](testing.md).
+- **Neither GitHub Actions workflow has ever run.** They are written against
+  documented behaviour, not observed behaviour.
 
 ## The rule
 

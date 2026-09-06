@@ -3,10 +3,19 @@ cmake_minimum_required(VERSION 3.22)
 # R-BLD-01: -Werror on our code and never on the vendor SDK. Defined here so
 # every component of ours can apply it to its own target; a vendor warning we
 # cannot fix must not be able to stop our build.
+#
+# -Wundef is deliberately ABSENT from this list, and this is the reason.
+# It is a preprocessor warning: it fires where a header is included, not where
+# the header lives, so a per-target flag cannot keep it off the vendor SDK.
+# ESP-IDF's own log headers test BOOTLOADER_BUILD, CONFIG_LOG_COLORS_SUPPORT
+# and others without defining them, so every file of ours that includes
+# esp_log.h fails the build. Observed, not assumed - CI run 34031391115.
+# The check still runs where it can work: test/host keeps it, and there no SDK
+# header is in scope.
 function(house_warnings target)
     target_compile_options(${target} PRIVATE
         -Wall -Wextra -Werror
-        -Wshadow -Wconversion -Wsign-conversion -Wundef -Wdouble-promotion
+        -Wshadow -Wconversion -Wsign-conversion -Wdouble-promotion
         -Wswitch-enum -Wpointer-arith -Wcast-align -Wmissing-prototypes
         -Wstrict-prototypes -Wold-style-definition)
 endfunction()

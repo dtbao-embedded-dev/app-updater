@@ -7,7 +7,7 @@ status: active
 updated: 2026-09-06
 source: docs/scripts/tool-esp.py
 confidence: confirmed
-keywords: tool-esp.py, build, flash, monitor, size, clean, menuconfig, format, --port, --check, IDF_PATH
+keywords: tool-esp.py, build, flash, monitor, size, clean, menuconfig, format, test, analyse, --port, --check, IDF_PATH, UNITY_DIR
 ---
 
 # Developer CLI (tool-esp.py)
@@ -27,6 +27,8 @@ Invoked as `python docs/scripts/tool-esp.py <command> [flags]`.
 | `clean` | `idf.py -C … clean` | |
 | `menuconfig` | `idf.py -C … menuconfig` | |
 | `format` | `clang-format -i` over our sources | With `--check`: `--dry-run --Werror` instead |
+| `test` | Configure + build `test/host`, then `ctest` | No board needed; see the note below |
+| `analyse` | `cppcheck` over our `.c`, `clang-tidy` over the host compile database | Needs `test/host` configured first |
 
 | Flag | Applies to | Meaning |
 |------|-----------|---------|
@@ -45,6 +47,16 @@ Invoked as `python docs/scripts/tool-esp.py <command> [flags]`.
 - The file list for `format` is `application/`, `middleware/`, `driver/` only —
   never the SDK, never `build/`. **The pre-commit hook applies the same rule**,
   so a local format and the hook can never disagree.
+- `test` configures into `build/host` and **asks for the Ninja generator on the
+  first configure when `ninja` is on PATH**. On Windows the CMake default is
+  MSVC, which rejects the firmware's warning flags outright. CMake will not
+  change the generator of an existing tree, so a stale `build/host` must be
+  deleted rather than reconfigured.
+- Unity is located by the harness, not by this script: from `$IDF_PATH`, or from
+  a `UNITY_DIR` passed once at configure time and then cached.
+- `analyse` skips a tool that is not installed and says so, but **fails** when
+  the compile database is missing — a silent partial analysis would read as a
+  clean one.
 - Exit status is whatever the underlying tool returned.
 
 ## Contract rules

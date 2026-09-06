@@ -1,17 +1,27 @@
 # Product 0xF001 - ESP32-S3, 4 MB flash.
 #
-# Two OTA slots and NO factory partition: the bootloader never rolls back to a
-# factory image, so a rollback-capable product has ota_0 + ota_1 only.
-# App partitions must start on a 64 KB boundary. The table itself sits at
-# 0x8000 and is 0xC00 long, so nothing may start before 0x9000.
+# TWO DIFFERENT APPLICATIONS, not two copies of one:
+#   app_updater  (ota_0) - this repo. Small recovery app: fetches an image,
+#                          writes it into the other slot, sets it bootable.
+#   app_firmware (ota_1) - the sibling app-firmware repo. The product itself.
+#
+# The bootloader selects a slot through otadata, so a firmware that fails to
+# confirm itself falls back to the updater, which can fetch a replacement.
+# NOTE the cost of this arrangement: there is only ONE updater image, so the
+# updater itself has no A/B slot to roll back to. A bad updater is a bad unit.
+#
+# No factory partition: the bootloader never rolls back to a factory image.
+# App partitions must start on a 64 KB boundary. The table sits at 0x8000 and
+# is 0xC00 long, so nothing may start before 0x9000. A partition label is at
+# most 16 characters.
 #
 # Changing a size here means changing CONFIG_ESPTOOLPY_FLASHSIZE_* in
 # sdkconfig.defaults in the same commit, and an OTA image built against the old
 # table will not fit the new one (R-VER-03).
 #
-# Name,     Type, SubType, Offset,   Size,     Flags
-nvs,        data, nvs,     0x9000,   0x6000,
-otadata,    data, ota,     0xF000,   0x2000,
-phy_init,   data, phy,     0x11000,  0x1000,
-ota_0,      app,  ota_0,   0x20000,  0x1E0000,
-ota_1,      app,  ota_1,   0x200000, 0x1E0000,
+# Name,         Type, SubType, Offset,   Size,     Flags
+nvs,            data, nvs,     0x9000,   0x6000,
+otadata,        data, ota,     0xF000,   0x2000,
+phy_init,       data, phy,     0x11000,  0x1000,
+app_updater,    app,  ota_0,   0x20000,  0x1E0000,
+app_firmware,   app,  ota_1,   0x200000, 0x1E0000,

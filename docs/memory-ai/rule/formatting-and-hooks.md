@@ -5,7 +5,7 @@ order: 2
 purpose: How code layout is decided and enforced, and how to install the hook that enforces it.
 status: active
 updated: 2026-09-06
-source: .clang-format, docs/.githooks/pre-commit, docs/scripts/tool-esp.py
+source: .clang-format, docs/.githooks/pre-commit, docs/scripts/tool-esp.py, .github/workflows/ci.yml
 confidence: confirmed
 keywords: clang-format, pre-commit, core.hooksPath, InsertBraces, BreakBeforeBraces, format --check
 ---
@@ -34,6 +34,11 @@ question comes up in review.
    hides the two real lines inside it. A repo-wide reformat is its own commit.
 5. `clang-format 15+` is required — the config uses `InsertBraces`, which
    younger versions reject.
+6. **CI pins the exact version, `22.1.5` from PyPI.** Two clang-format releases
+   disagree on real code, so an unpinned CI would reject what the hook had just
+   accepted. Bumping it is a deliberate commit that reformats the tree, not a
+   drift. The hook itself is unpinned and skips silently when the tool is
+   absent, so CI is the check that actually holds.
 
 ## The settled values
 
@@ -57,5 +62,6 @@ hook can never disagree.
 
 ## See also
 
+- [../architecture/ci-pipeline.md](../architecture/ci-pipeline.md) — the job that re-checks this
 - [../interface/tool-esp-cli.md](../interface/tool-esp-cli.md) — the full command surface
 - [coding-standard-source.md](coding-standard-source.md) — the standard behind these values

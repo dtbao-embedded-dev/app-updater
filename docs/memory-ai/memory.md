@@ -38,9 +38,12 @@ _Generated 2026-09-06 - 23 durable doc(s)._
   firmware's own `-Werror` warning set. **Proven to have teeth** — breaking the
   wrap-safe due check makes exactly one test go red, and restoring it makes the
   suite green again.
-- Static analysis at a clean baseline, verified by running it: `cppcheck` 0
-  findings, `clang-tidy` 0 findings, no secrets in the tree. One real finding
-  (a parameter that could be `const`) was found and fixed, not suppressed.
+- Static analysis at a clean baseline, verified by running it locally **and in
+  the CI container**: `cppcheck` 0 findings, `clang-tidy` 0 findings, no secrets
+  in the tree. One real finding (a parameter that could be `const`) was found
+  and fixed, not suppressed.
+- **The firmware compiles.** `idf.py build` completes in `espressif/idf:v6.1`:
+  1090 targets, `app_updater.bin` 198 KB against a 1.875 MB slot, 90% free.
 
 ## What's left
 
@@ -60,19 +63,18 @@ _Generated 2026-09-06 - 23 durable doc(s)._
 
 ## Known issues
 
-- 🔴 **The ESP-IDF build has never been run.** No `IDF_PATH` was available in the
-  session that wrote this repo, so the component names in `PRIV_REQUIRES`, the
-  main-less build shape, and the partition table are all unverified. See
-  [architecture/build-and-toolchain.md](architecture/build-and-toolchain.md).
+- ⚠ The firmware has been **built** but never **flashed**. The partition table
+  is accepted by the build and the image fits with 90% of its slot free; whether
+  the layout boots on real hardware is still unknown.
 - 🔴 `spec-verify` has never been run against this repo. It will at minimum flag
   the deviations in
   [rule/known-deviations.md](rule/known-deviations.md).
 - ⚠ A test function that is not listed in `test/host/runner.c` compiles, links
   and never runs, with nothing going red to say so. The two lists must be kept
   in step by hand.
-- 🔴 **Neither GitHub Actions workflow has ever executed.** Docker was
-  unavailable, so the container steps, the analyser installs and the release
-  gates are written against documented behaviour, not observed behaviour.
+- 🔴 **`release.yml` has never executed.** No tag has been pushed, so the
+  version gate, the artifact collection and `gh release create` are written
+  against documented behaviour, not observed behaviour. `ci.yml` has run.
 - ⚠ The first build may fail on `-Wconversion`/`-Werror` in SDK macros expanded
   inside our translation units. That is the rule working; fix at the call site,
   never by silencing the warning.
@@ -85,12 +87,18 @@ _Generated 2026-09-06 - 23 durable doc(s)._
 
 ## Current focus
 
-Nothing is under active edit. The next meaningful move is **getting one real CI
-run to go green**: the firmware has never been compiled by ESP-IDF and neither
-workflow has ever executed, so the whole target-side story is written rather
-than observed. Everything that could be verified on a PC has been.
+CI runs and the firmware compiles. What is left untested is everything that
+needs the two things a CI runner does not have: **a board** and **a tag**.
+Nothing boots yet, and `release.yml` has never executed.
 
 ## Recent changes
+
+- 2026-09-06 — First real CI run (34031391115): 4/6 green. Two genuine failures
+  found and fixed — `-Wundef` cannot coexist with ESP-IDF's log headers, and
+  `pip` is not on PATH in the IDF container until `export.sh` is sourced. Both
+  fixes reproduced and verified in the same image locally before re-pushing.
+- 2026-09-06 — Firmware built for the first time: 1090 targets,
+  `app_updater.bin` 198 KB, 90% of its slot free.
 
 - 2026-09-06 — CI grown to the six jobs R-SAN asks for: format, cppcheck +
   clang-tidy, host tests, ASan/UBSan, firmware build, gitleaks. Tool versions
@@ -124,15 +132,15 @@ than observed. Everything that could be verified on a PC has been.
 
 ## Next steps
 
-1. Export ESP-IDF 6.x and run `python docs/scripts/tool-esp.py build`. Expect
-   the first failures in component names and `-Wconversion`.
-2. On success, flip
-   [architecture/build-and-toolchain.md](architecture/build-and-toolchain.md)
-   and [data/flash-and-partitions.md](data/flash-and-partitions.md) from
-   `inferred` to `confirmed`.
+1. Flash a real 0xF001 board. That is the only thing that can confirm
+   [data/flash-and-partitions.md](data/flash-and-partitions.md), which is still
+   arithmetic rather than observation.
+2. Fill the BSP board table from the real schematic first — the current GPIO is
+   a placeholder and may be wired to something else.
 3. Run `spec-verify` and resolve or record what it finds.
-4. Fill the BSP board table from the real schematic.
-5. Then start on the self-test in `confirm_or_roll_back()`.
+4. Then the self-test in `confirm_or_roll_back()`, the hole that matters most.
+5. `release.yml` stays unproven until a tag is pushed; consider a throwaway
+   pre-release tag on a branch to exercise it before it matters.
 
 ## Active decisions
 
@@ -311,17 +319,18 @@ that logs the vendor value and returns the module's own code.
 - [repo-layout.md](repo-layout.md) — the tree these layers occupy
 - [../data/error-code-model.md](../data/error-code-model.md) — the two code spaces in detail
 
-### [architecture] Build and Toolchain  🟡 [inferred - verify]
+### [architecture] Build and Toolchain
 *`architecture/build-and-toolchain.md` - How the 0xF001 image is configured and compiled, including the main-less ESP-IDF build and the warning policy. - status: active - source: workspace/0xF001/CMakeLists.txt, workspace/0xF001/sdkconfig.defaults, VERSION, .clang-format - keywords: EXTRA_COMPONENT_DIRS, COMPONENTS, house_warnings, PROJECT_VER, sdkconfig.defaults, idf.py, Werror, esp32s3*
 
 # Build and Toolchain
 
 > One CMake entry in `workspace/0xF001/` pulls the three layer directories in, applies the house warning set to our targets only, and takes the version from the repo's single `VERSION` file.
 
-🟡 **inferred:** the component names in `PRIV_REQUIRES` and the main-less build
-shape below have **never been compiled against ESP-IDF 6.x** in this repo. They
-follow the documented mechanism but are unverified. Treat the first successful
-`build` as the confirmation, and flip this doc to `confirmed` then.
+🟢 **Verified by building it.** `idf.py build` completes inside
+`espressif/idf:v6.1` — 1090 targets, `app_updater.bin` at 0x30380 bytes (198 KB)
+against a 0x1E0000 slot, 90% free. The main-less shape, the component names in
+`PRIV_REQUIRES`, `EXTRA_COMPONENT_DIRS` and the partition table are therefore
+observed facts, not documented intentions.
 
 ## Toolchain
 
@@ -369,9 +378,21 @@ Consequences a rebuild must honour:
 `house_warnings()` applies, **per target and never globally**, so a vendor
 warning we cannot fix cannot stop our build:
 
-`-Wall -Wextra -Werror` plus `-Wshadow -Wconversion -Wsign-conversion -Wundef
+`-Wall -Wextra -Werror` plus `-Wshadow -Wconversion -Wsign-conversion
 -Wdouble-promotion -Wswitch-enum -Wpointer-arith -Wcast-align
 -Wmissing-prototypes -Wstrict-prototypes -Wold-style-definition`.
+
+**`-Wundef` is missing from the target list on purpose**, and it is the one
+place the house warning set cannot be applied whole. It is a *preprocessor*
+warning: it fires where a header is included, not where the header lives, so a
+per-target flag cannot keep it off the vendor SDK the way R-BLD-01 requires.
+ESP-IDF's own `esp_log_config.h`, `esp_log_color.h` and `esp_log_timestamp.h`
+test `BOOTLOADER_BUILD`, `CONFIG_LOG_COLORS_SUPPORT` and others without
+defining them, so **every** file of ours that includes `esp_log.h` failed the
+build. Observed in CI run 34031391115, then reproduced locally.
+
+The check keeps its teeth where it can work: `test/host` still applies
+`-Wundef`, and no SDK header is in scope there.
 
 Two consequences visible in the source:
 
@@ -426,17 +447,27 @@ the changelog headings. See
 - [../data/flash-and-partitions.md](../data/flash-and-partitions.md) — the partition table this config selects
 - [../interface/tool-esp-cli.md](../interface/tool-esp-cli.md) — the wrapper that runs this build
 
-### [architecture] CI and Release Pipeline  🟡 [inferred - verify]
+### [architecture] CI and Release Pipeline
 *`architecture/ci-pipeline.md` - What GitHub Actions runs on a push and on a tag, in which container, and which gates can stop a release. - status: inferred - source: .github/workflows/ci.yml, .github/workflows/release.yml - keywords: GitHub Actions, ci.yml, release.yml, espressif/idf:v6.1, ctest, clang-format, clang-tidy, cppcheck, gitleaks, ASan, UBSan, gh release create, SHA256SUMS*
 
 # CI and Release Pipeline
 
 > Three checks on every push, and a tag that cannot publish unless it agrees with `VERSION` and has a changelog entry waiting for it.
 
-🟡 **inferred:** neither workflow has ever executed. They are written against
-the documented behaviour of the actions and of the `espressif/idf:v6.1` image
-(confirmed to exist on Docker Hub), but the Docker daemon was unavailable when
-they were authored. The first green run is the confirmation.
+🟢 **`ci.yml` has run.** First run (34031391115) went 4/6: `clang-format`, both
+host-test jobs and the secret scan passed on the first try; `firmware` and
+`analyse` failed, and both failures were real rather than cosmetic — see below.
+`release.yml` has **still never executed**, because no tag has been pushed.
+
+Two things the first run taught, both now fixed:
+
+| Failure | Cause | Fix |
+|---------|-------|-----|
+| `firmware` | `-Wundef` fires inside ESP-IDF's own log headers when they are included from our files; a per-target flag cannot prevent it | Dropped `-Wundef` from the target warning set, kept it on the host build |
+| `analyse` | `pip: not found` — the IDF image keeps python in a virtualenv that is only on `PATH` after `export.sh`, and the default container shell is `sh` | `shell: bash` plus `. $IDF_PATH/export.sh` before `python -m pip` |
+
+Both fixes were then verified by running the same commands in the same image
+locally before pushing again.
 
 ## CI — `.github/workflows/ci.yml`
 
@@ -1648,7 +1679,14 @@ pure-logic modules; cppcheck, which needs no compile database, sees the rest.
 ## Versions are pinned
 
 `clang-format 22.1.5`, `clang-tidy 22.1.8`, `gitleaks 8.30.1`, named once at the
-top of `ci.yml`. An unpinned analyser rejects on Tuesday what it accepted on
+top of `ci.yml`.
+
+**`cppcheck` is the exception and is not pinned**: it comes from the container's
+apt, which currently gives 2.13.0 — older than a typical desktop install. A
+newer local cppcheck can therefore report something CI does not. That is the
+safe direction to be wrong in (a developer sees more, not less), but it means a
+clean CI is not proof of a clean local run. Pinning it would mean building
+cppcheck from source in every job, which is not worth the minutes. An unpinned analyser rejects on Tuesday what it accepted on
 Monday, on code nobody touched. Match `clang-tidy` locally with
 `pip install clang-tidy==22.1.8`; the local `clang-format` must be 22.1.5
 exactly, because formatting differences are diffs.

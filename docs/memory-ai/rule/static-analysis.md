@@ -58,7 +58,14 @@ pure-logic modules; cppcheck, which needs no compile database, sees the rest.
 ## Versions are pinned
 
 `clang-format 22.1.5`, `clang-tidy 22.1.8`, `gitleaks 8.30.1`, named once at the
-top of `ci.yml`. An unpinned analyser rejects on Tuesday what it accepted on
+top of `ci.yml`.
+
+**`cppcheck` is the exception and is not pinned**: it comes from the container's
+apt, which currently gives 2.13.0 — older than a typical desktop install. A
+newer local cppcheck can therefore report something CI does not. That is the
+safe direction to be wrong in (a developer sees more, not less), but it means a
+clean CI is not proof of a clean local run. Pinning it would mean building
+cppcheck from source in every job, which is not worth the minutes. An unpinned analyser rejects on Tuesday what it accepted on
 Monday, on code nobody touched. Match `clang-tidy` locally with
 `pip install clang-tidy==22.1.8`; the local `clang-format` must be 22.1.5
 exactly, because formatting differences are diffs.

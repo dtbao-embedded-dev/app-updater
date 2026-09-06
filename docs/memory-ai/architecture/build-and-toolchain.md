@@ -6,7 +6,7 @@ purpose: How the 0xF001 image is configured and compiled, including the main-les
 status: active
 updated: 2026-09-06
 source: workspace/0xF001/CMakeLists.txt, workspace/0xF001/sdkconfig.defaults, VERSION, .clang-format
-confidence: inferred
+confidence: confirmed
 keywords: EXTRA_COMPONENT_DIRS, COMPONENTS, house_warnings, PROJECT_VER, sdkconfig.defaults, idf.py, Werror, esp32s3
 ---
 
@@ -14,10 +14,11 @@ keywords: EXTRA_COMPONENT_DIRS, COMPONENTS, house_warnings, PROJECT_VER, sdkconf
 
 > One CMake entry in `workspace/0xF001/` pulls the three layer directories in, applies the house warning set to our targets only, and takes the version from the repo's single `VERSION` file.
 
-🟡 **inferred:** the component names in `PRIV_REQUIRES` and the main-less build
-shape below have **never been compiled against ESP-IDF 6.x** in this repo. They
-follow the documented mechanism but are unverified. Treat the first successful
-`build` as the confirmation, and flip this doc to `confirmed` then.
+🟢 **Verified by building it.** `idf.py build` completes inside
+`espressif/idf:v6.1` — 1090 targets, `app_updater.bin` at 0x30380 bytes (198 KB)
+against a 0x1E0000 slot, 90% free. The main-less shape, the component names in
+`PRIV_REQUIRES`, `EXTRA_COMPONENT_DIRS` and the partition table are therefore
+observed facts, not documented intentions.
 
 ## Toolchain
 
@@ -65,9 +66,21 @@ Consequences a rebuild must honour:
 `house_warnings()` applies, **per target and never globally**, so a vendor
 warning we cannot fix cannot stop our build:
 
-`-Wall -Wextra -Werror` plus `-Wshadow -Wconversion -Wsign-conversion -Wundef
+`-Wall -Wextra -Werror` plus `-Wshadow -Wconversion -Wsign-conversion
 -Wdouble-promotion -Wswitch-enum -Wpointer-arith -Wcast-align
 -Wmissing-prototypes -Wstrict-prototypes -Wold-style-definition`.
+
+**`-Wundef` is missing from the target list on purpose**, and it is the one
+place the house warning set cannot be applied whole. It is a *preprocessor*
+warning: it fires where a header is included, not where the header lives, so a
+per-target flag cannot keep it off the vendor SDK the way R-BLD-01 requires.
+ESP-IDF's own `esp_log_config.h`, `esp_log_color.h` and `esp_log_timestamp.h`
+test `BOOTLOADER_BUILD`, `CONFIG_LOG_COLORS_SUPPORT` and others without
+defining them, so **every** file of ours that includes `esp_log.h` failed the
+build. Observed in CI run 34031391115, then reproduced locally.
+
+The check keeps its teeth where it can work: `test/host` still applies
+`-Wundef`, and no SDK header is in scope there.
 
 Two consequences visible in the source:
 

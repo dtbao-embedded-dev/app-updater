@@ -1,6 +1,5 @@
 /**
  * @file    runner.c
- * @author  dtbao
  * @date    2026-09-06
  * @brief   Unity entry point listing every host test in the repo.
  *
@@ -20,6 +19,20 @@
 void test_fw_err_str_names_every_defined_code(void);
 void test_fw_err_only_ok_is_non_negative(void);
 void test_fw_err_str_rejects_an_unknown_code(void);
+
+void test_protocol_crc_matches_the_known_answer_vector(void);
+void test_protocol_round4_pads_to_the_four_byte_boundary(void);
+void test_protocol_accepts_a_minimum_frame_with_no_payload(void);
+void test_protocol_hunts_past_leading_garbage(void);
+void test_protocol_resumes_one_byte_after_an_oversized_length(void);
+void test_protocol_accepts_the_largest_legal_length(void);
+void test_protocol_drops_a_frame_whose_crc_is_wrong(void);
+void test_protocol_covers_the_pad_bytes_in_the_crc(void);
+void test_protocol_never_resolves_the_all_zero_command(void);
+void test_protocol_cmd_lookup_separates_unsupported_from_unknown(void);
+void test_protocol_rsp_build_writes_status_first(void);
+void test_protocol_rsp_build_refuses_a_buffer_too_small(void);
+void test_protocol_status_str_names_every_defined_status(void);
 
 void test_updater_step_before_start_returns_err_state(void);
 void test_updater_init_twice_returns_err_state(void);
@@ -51,6 +64,20 @@ int main(void)
     RUN_TEST(test_fw_err_str_names_every_defined_code);
     RUN_TEST(test_fw_err_only_ok_is_non_negative);
     RUN_TEST(test_fw_err_str_rejects_an_unknown_code);
+
+    RUN_TEST(test_protocol_crc_matches_the_known_answer_vector);
+    RUN_TEST(test_protocol_round4_pads_to_the_four_byte_boundary);
+    RUN_TEST(test_protocol_accepts_a_minimum_frame_with_no_payload);
+    RUN_TEST(test_protocol_hunts_past_leading_garbage);
+    RUN_TEST(test_protocol_resumes_one_byte_after_an_oversized_length);
+    RUN_TEST(test_protocol_accepts_the_largest_legal_length);
+    RUN_TEST(test_protocol_drops_a_frame_whose_crc_is_wrong);
+    RUN_TEST(test_protocol_covers_the_pad_bytes_in_the_crc);
+    RUN_TEST(test_protocol_never_resolves_the_all_zero_command);
+    RUN_TEST(test_protocol_cmd_lookup_separates_unsupported_from_unknown);
+    RUN_TEST(test_protocol_rsp_build_writes_status_first);
+    RUN_TEST(test_protocol_rsp_build_refuses_a_buffer_too_small);
+    RUN_TEST(test_protocol_status_str_names_every_defined_status);
 
     RUN_TEST(test_updater_step_before_start_returns_err_state);
     RUN_TEST(test_updater_init_twice_returns_err_state);

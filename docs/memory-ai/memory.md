@@ -7,7 +7,7 @@
 > architecture -> data -> interface -> behavior -> rule (then adr/).
 > Confidence per doc: 🟢 confirmed | 🟡 inferred (verify) | 🔴 gap (needs a human).
 
-_Generated 2026-09-06 - 25 durable doc(s)._
+_Generated 2026-09-07 - 33 durable doc(s)._
 
 ## State (transient)
 
@@ -45,6 +45,27 @@ _Generated 2026-09-06 - 25 durable doc(s)._
 - **The firmware compiles.** `idf.py build` completes in `espressif/idf:v6.1`:
   1090 targets, `app_updater.bin` 0x31120 bytes (196 KB) against a 2 MB slot,
   90% free. Rebuilt clean on the 16 MB table at 240 MHz.
+- **A USB command channel, host-verified end to end.** Three new modules
+  (`middleware/protocol`, `middleware/command`, `driver/usb_cdc`) plus the wiring
+  in `application/app`. The host suite went from 26 tests to 56, all green: the
+  frame codec (resync past garbage, a `LENGTH` past the cap resuming one byte on,
+  a bad CRC dropped silently, pad bytes inside the CRC), the dispatch order
+  (`-2` before `-7` before `-3` before `-4`), every served handler, and the whole
+  upgrade session (the chunk band, sequential offsets, the 1024 rule and its
+  last-chunk exemption, a wrong image CRC refusing to finalise, and `UPG_BEGIN`
+  freeing the previous OTA handle).
+- **Three of those tests were proved to have teeth by mutation**, not assumed:
+  changing the parser's resync rule reddens exactly the resync test; reporting a
+  wrong `LENGTH` as `-4` reddens exactly the length test; dropping the
+  free-the-old-handle call in `UPG_BEGIN` reddens exactly the two open-session
+  assertions.
+- `docs/scripts/tool-usb.py` speaks the protocol from a PC. Its `selftest` runs
+  with no board and no pyserial, and pins the CRC to the same fixed vector the
+  firmware tests use.
+- **Measured, not estimated:** the channel costs ~65.6 KB of static RAM (two
+  32788-byte frame buffers); `.bss` is 70,592 bytes, 20.66 % of DRAM, leaving
+  roughly 270 KB for the heap. `app_updater.bin` is 0x3a7f0 with 89 % of its
+  2 MB slot free.
 - **v0.1.0 is released**, cut end to end by `tool-release.py`: seven phases, two
   merged pull requests, an annotated tag on `main`, and eight published
   artifacts. Both workflows green on the runs that produced it.
@@ -57,7 +78,9 @@ _Generated 2026-09-06 - 25 durable doc(s)._
    it exists, a broken image confirms itself and rollback never fires.
 3. `updater` `CHECKING` step: fetch the manifest, compare versions, decide.
 4. `updater` `DOWNLOADING` step: drive the fetch into the OTA write API, set the
-   boot partition.
+   boot partition. The USB path already does this work in
+   `middleware/command/src/command_upgrade.c`; the HTTP path should reuse the
+   same session rules rather than growing a second set.
 5. Network bring-up (Wi-Fi or Ethernet) — not in this repo at all.
 6. **Flash and boot v0.1.0 on real hardware.** Nothing has ever executed on a
    board, so everything about the flash layout is still arithmetic.
@@ -69,6 +92,16 @@ _Generated 2026-09-06 - 25 durable doc(s)._
    two-line change it takes.
 
 ## Known issues
+
+- ⚠ **The USB channel has never enumerated on a board.** Every byte of it is
+  proved on the host, and the descriptor, the PHY switch and the COM port are
+  the parts a host test cannot reach. First thing to check on the bench:
+  `USB\VID_A331&PID_F001` in Device Manager, then
+  `python docs/scripts/tool-usb.py ping`.
+- ⚠ **Flashing changed.** The console moved to UART0 because the USB command
+  channel claims the single internal PHY, so there is no USB auto-download reset
+  any more: flash over a UART0 bridge, or hold BOOT. Anyone following the older
+  instructions will conclude the board is dead when it is not.
 
 - ⚠ The firmware has been **built** but never **flashed**. The partition table
   is accepted by the build and the image fits with 90% of its slot free; whether
@@ -97,15 +130,38 @@ _Generated 2026-09-06 - 25 durable doc(s)._
 
 ## Current focus
 
-`v0.1.0` is out. Every automated path — build, test, sanitizers, analysis,
-secret scan, release — has now been exercised for real.
+The **USB command channel** is written and green: 56 host tests, a clean
+firmware build, and three mutation checks proving the tests bite. A PC can now
+read a unit and push an image into `app_firmware` without a network.
 
-**One thing has never happened: this code has never run on hardware.** That is
-the whole of what is left to find out, and it makes the BSP board table the
-next thing to touch, because its GPIO numbers are placeholders that may be
-wired to something else entirely.
+**And it has still never run on hardware.** That is unchanged and now matters
+more, because the channel added two things a host test cannot reach: the USB
+descriptor a PC has to accept, and the PHY switch that takes USB-Serial-JTAG
+away. The next session is a bench session, in this order:
+
+1. Fill the BSP board table from the real 0xF001 schematic — still placeholders,
+   still able to drive a pin into something that does not like it.
+2. Flash over **UART0** (the console moved there; USB auto-download is gone).
+3. Cable in, and look for `USB\VID_A331&PID_F001`. If it does not appear, the
+   descriptor or the PHY switch is where to look, not the protocol.
+4. `tool-usb.py ping`, then `version`, then a real `upgrade` of an
+   `app_firmware` image, then `boot-slot 1` and `restart`, then `version` again
+   to confirm the new image is what booted. That last step is the only one that
+   proves the upgrade worked.
 
 ## Recent changes
+
+- 2026-09-07 — **The USB command channel.** CDC-ACM on USB-OTG at
+  `0xA331:0xF001`, speaking the binary protocol from
+  `data-monitor/data-mirror-firmware/docs/spec/usb`. `middleware/protocol` holds
+  the frame codec and a 46-row opcode map; `middleware/command` dispatches to
+  ten served handlers and answers `-7` for the 36 aimed at hardware this board
+  does not have; `driver/usb_cdc` owns TinyUSB, the repo's first managed
+  dependency, since ESP-IDF v6.1 ships no USB device stack. The console moved to
+  UART0 because the S3 has one internal USB PHY and TinyUSB claims it. Also
+  `docs/scripts/tool-usb.py` and `fullclean` in `tool-esp.py`. Two findings
+  recorded as deviations: the spec's `PING` ceiling contradicts its own cap, and
+  the 36 unsupported opcodes are a deliberate `-7` rather than stubs.
 
 - 2026-09-06 — **Boot banner, and the BSP now asks the chip.** `app_run()`
   opens with `print_banner()` — printf, not ESP_LOGI — carrying the git
@@ -202,6 +258,14 @@ wired to something else entirely.
 
 ## Active decisions
 
+- The USB dispatcher asks the application whether a slot write is in progress
+  through a callback; it must not include `updater.h`, because `middleware/`
+  may not include from `application/`. The plan for this work originally had it
+  holding an `updater_t *`, which would have broken that.
+- `PROTOCOL_MAX_DATA` stays at the spec's 32772 so a host built against the spec
+  needs no change; the cost is two 32788-byte buffers, and the third the spec
+  budgets was removed by building a reply body straight into the reply frame.
+
 - Commit messages carry no AI co-author or generation trailer. See
   [rule/commit-messages.md](rule/commit-messages.md).
 - The project-wide status type is `fw_err_t` in `middleware/fw/`, **not**
@@ -224,7 +288,7 @@ wired to something else entirely.
 ## Memory
 
 ### [architecture] Repository Layout
-*`architecture/repo-layout.md` - The three-layer source tree, the shape of one module, and where build entries, scripts and hooks live. - status: active - source: application/, middleware/, driver/, workspace/0xF001/, test/host/, .github/workflows/, docs/, README.md - keywords: application, middleware, driver, bsp, workspace, 0xF001, include, src, module directory*
+*`architecture/repo-layout.md` - The three-layer source tree, the shape of one module, and where build entries, scripts and hooks live. - status: active - source: application/, middleware/, driver/, workspace/0xF001/, test/host/, .github/workflows/, docs/, README.md - keywords: application, middleware, driver, bsp, usb_cdc, protocol, command, workspace, 0xF001, include, src, module directory*
 
 # Repository Layout
 
@@ -247,16 +311,24 @@ before anyone opens a header.
 | `application/updater/` | The update cycle: when to check, when to retry, when to give up. |
 | `middleware/fw/` | The project-wide status code every app and middleware call returns. |
 | `middleware/ota_http/` | Fetches an image over HTTPS and hands it out chunk by chunk. |
+| `middleware/protocol/` | The USB wire format: frame codec, status codes, opcode map. |
+| `middleware/command/` | Dispatches a decoded USB frame to the handler that serves it. |
 | `middleware/storage/` | The persisted settings/boot record in NVS. |
 | `driver/bsp/` | Pin map, clock, flash geometry. The only place a pin number appears. |
+| `driver/usb_cdc/` | The CDC-ACM byte pipe on USB-OTG. Owns the TinyUSB stack. |
 | `workspace/0xF001/` | Build entry for product 0xF001: CMakeLists, sdkconfig.defaults, partitions.csv. |
-| `test/host/` | Unity runner, the host fake for `esp_log.h`, and the CMake that builds them. |
+| `test/host/` | Unity runner, the host fakes for the SDK headers our logic includes, and the CMake that builds them. |
 | `.github/workflows/` | CI on every push, release on every `v*` tag. |
 | `docs/scripts/` | Developer commands (Python 3). |
 | `docs/.githooks/` | Git hooks (Python 3). |
 | `docs/memory-ai/` | This memory bank. |
 
-There is no `third_party/` yet: nothing needed to go in it. `test/` exists but
+There is no `third_party/` yet, but there is now one **managed dependency**:
+`driver/usb_cdc/idf_component.yml` pulls `espressif/esp_tinyusb`, because
+ESP-IDF v6.1 ships no USB device stack at all. It lands in
+`workspace/0xF001/managed_components/`, which is gitignored along with
+`dependencies.lock`, so a fresh clone resolves it on its first build.
+ `test/` exists but
 holds only the **host harness** — the tests themselves stay beside their modules
 (R-RPO-07), and no on-target test exists yet.
 
@@ -268,14 +340,18 @@ Every directory under the three layer directories has the same inside:
 |------|------|
 | `include/<mod>.h` | The single public header. The only file an outsider includes. |
 | `src/<mod>.c` | Implementation. |
-| `src/<mod>_priv.h` | Internal declarations. Present only where something is actually shared; currently only `application/app/`. |
-| `test/test_<mod>.c` | Host tests, present for `fw` and `updater`. Each function must also be listed in `test/host/runner.c` or it never runs. |
+| `src/<mod>_priv.h` | Internal declarations. Present only where something is actually shared: `application/app/` and `middleware/command/`. |
+| `test/test_<mod>.c` | Host tests, present for `fw`, `updater`, `protocol` and `command`. Each function must also be listed in `test/host/runner.c` or it never runs. |
 | `CMakeLists.txt` | ESP-IDF component registration. |
 
 The directory name, the public header name, and the symbol prefix are the same
 word, so one grep for the prefix finds the folder, the file and every symbol in
-it. Verified: each of `app`, `updater`, `fw`, `ota_http`, `storage`, `bsp` is
-declared in exactly one module directory.
+it. Verified: each of `app`, `updater`, `fw`, `ota_http`, `protocol`, `command`,
+`storage`, `bsp`, `usb_cdc` is declared in exactly one module directory.
+
+`middleware/command/` is the one module with two sources - `command.c` for the
+dispatch and the stateless handlers, `command_upgrade.c` for the image transfer
+session - which is what `command_priv.h` exists to bridge.
 
 ## Dependencies & build
 
@@ -305,7 +381,7 @@ Toolchain is ESP-IDF 6.x targeting ESP32-S3, C11. The build entry is
 - [../rule/coding-standard-source.md](../rule/coding-standard-source.md) — where the R-XXX-nn rules come from
 
 ### [architecture] Layering and Dependencies
-*`architecture/layering-and-dependencies.md` - The call direction between layers, the component dependency graph, and why there are two separate error code spaces. - status: active - source: application/app/CMakeLists.txt, application/updater/CMakeLists.txt, middleware/*/CMakeLists.txt, driver/bsp/CMakeLists.txt - keywords: REQUIRES, PRIV_REQUIRES, layering, dependency direction, callback, fw_err_t, bsp_err_t*
+*`architecture/layering-and-dependencies.md` - The call direction between layers, the component dependency graph, and why there are two separate error code spaces. - status: active - source: application/app/CMakeLists.txt, application/updater/CMakeLists.txt, middleware/*/CMakeLists.txt, driver/bsp/CMakeLists.txt - keywords: REQUIRES, PRIV_REQUIRES, layering, dependency direction, callback, fw_err_t, bsp_err_t, usb_cdc_err_t, command_busy_cb_t*
 
 # Layering and Dependencies
 
@@ -320,9 +396,9 @@ opens a header.
 ```mermaid
 flowchart TD
     APP["application/ - app, updater"]
-    MW["middleware/ - fw, ota_http, storage"]
-    DRV["driver/bsp - pins, clock, flash geometry"]
-    SDK["ESP-IDF - nvs_flash, esp_http_client, app_update, esp_timer"]
+    MW["middleware/ - fw, ota_http, storage, protocol, command"]
+    DRV["driver/ - bsp pins and clock, usb_cdc the USB stack"]
+    SDK["ESP-IDF - nvs_flash, esp_http_client, app_update, esp_timer, esp_tinyusb"]
 
     APP --> MW --> DRV --> SDK
     MW -. "event callback" .-> APP
@@ -335,12 +411,15 @@ the module's own public header; `PRIV_REQUIRES` means only the `.c` uses it.
 
 | Component | REQUIRES | PRIV_REQUIRES (ours) | PRIV_REQUIRES (SDK) |
 |-----------|----------|----------------------|---------------------|
-| `app` | `fw` | `bsp`, `storage`, `updater` | `app_update`, `esp_app_format`, `esp_partition`, `esp_timer`, `freertos`, `nvs_flash` |
+| `app` | `fw` | `bsp`, `command`, `protocol`, `storage`, `updater`, `usb_cdc` | `app_update`, `esp_app_format`, `esp_partition`, `esp_timer`, `freertos`, `nvs_flash` |
 | `updater` | `fw` | `ota_http`, `storage` | `app_update`, `esp_partition` |
 | `ota_http` | `fw` | — | `esp_http_client`, `esp-tls` |
+| `command` | `fw`, `protocol` | — | `app_update`, `esp_app_format`, `esp_partition`, `esp_hw_support`, `esp_system`, `esp_rom`, `freertos` |
+| `protocol` | `fw` | — | `esp_rom` |
 | `storage` | `fw` | — | `nvs_flash`, `esp_rom` |
 | `fw` | — | — | — |
-| `bsp` | — | — | `esp_driver_gpio`, `esp_hw_support` |
+| `bsp` | — | — | `esp_driver_gpio`, `esp_hw_support`, `spi_flash` |
+| `usb_cdc` | — | — | `esp_tinyusb`, `freertos` |
 
 `fw` is a leaf: it depends on nothing, which is what lets both layers above it
 include it.
@@ -351,11 +430,14 @@ include it.
 |-------|------|---------|-----|
 | Project-wide | `fw_err_t` | `application/`, `middleware/` | One code space means the application handles a timeout the same way whichever module produced it. |
 | Driver-local | `bsp_err_t` | `driver/bsp/` | The driver layer must not include a middleware header, so it cannot use `fw_err_t`. |
+| Driver-local | `usb_cdc_err_t` | `driver/usb_cdc/` | Same reason. Mapped in `bring_up_usb()`, the one place that knows both. |
+| Wire | `protocol_status_t` | the USB channel | Not an internal code at all: these are bytes a PC parses, so they may never be renumbered. `middleware/command` returns them; nothing converts them to `fw_err_t` because they mean different things. |
 
 Both share the same meanings for the generic range `-1 .. -19`, so the map
-between them is one-for-one. It is applied in exactly one place, inside
-`bring_up_bsp()` in `application/app/src/app.c`. If `bsp` ever grows a code the
-application must distinguish, that function is the only edit.
+between them is one-for-one. It is applied in exactly one place per driver, inside
+`bring_up_bsp()` and `bring_up_usb()` in `application/app/src/app.c`. If a
+driver ever grows a code the application must distinguish, those functions are
+the only edit.
 
 Vendor status codes (`esp_err_t`) never escape the module that called the SDK:
 each of `bsp`, `storage` and `ota_http` has a private `from_esp_err()` helper
@@ -364,10 +446,17 @@ that logs the vendor value and returns the module's own code.
 ## Reproduction notes
 
 - Verified: nothing under `driver/` includes `fw.h`, `storage.h`, `ota_http.h`,
-  `updater.h` or `app.h`; nothing under `middleware/` includes `updater.h` or
-  `app.h`.
+  `protocol.h`, `command.h`, `updater.h` or `app.h`; nothing under
+  `middleware/` includes `updater.h` or `app.h`.
 - `middleware/fw` is included sideways by its middleware siblings. That is a
   one-way include of a leaf, not a cycle.
+- **The USB channel is the sharpest case of "calls go down".** The dispatcher
+  in `middleware/command` has to know whether the update cycle - which lives in
+  `application/` - is already writing an OTA slot. It may not include
+  `updater.h`, so it **asks** through a `command_busy_cb_t` the application
+  supplies, exactly as `ota_http` reports progress upward without knowing who it
+  notifies. Reading the state directly would have been an upward include and is
+  the one thing this layering forbids.
 - A driver must never report upward with a direct call. `updater` receives state
   changes from nothing below it, but `ota_http` reports progress upward through
   a `void *ctx` callback supplied at init — the module does not know the name of
@@ -902,6 +991,115 @@ now reads that from the chip, so the first boot log settles it.
 - [../architecture/build-and-toolchain.md](../architecture/build-and-toolchain.md) — the config that selects this table
 - [../behavior/boot-and-bring-up.md](../behavior/boot-and-bring-up.md) — how the running slot confirms itself
 
+### [data] USB Frame Format
+*`data/usb-frame-format.md` - The wire format of the USB command channel, its constants, and what those constants cost in RAM. - status: active - source: middleware/protocol/include/protocol.h, middleware/protocol/src/protocol.c, middleware/protocol/test/test_protocol.c - keywords: PROTOCOL_HDR_REQ, PROTOCOL_HDR_RSP, PROTOCOL_MAX_DATA, PROTOCOL_MAX_FRAME, round4, CRC32, protocol_status_t, PROTOCOL_UPG_CHUNK_MIN, PROTOCOL_UPG_CHUNK_CAP, little-endian*
+
+# USB Frame Format
+
+> Five fields, all 4-byte aligned, little-endian, with a CRC-32 over everything
+> in front of it. Adopted verbatim from
+> `data-monitor/data-mirror-firmware/docs/spec/usb/usb-command-protocol.md`.
+
+## The frame
+
+Left to right: **HEADER · COMMAND · LENGTH · DATA · CRC32**.
+
+| Field | Size | Meaning |
+|-------|------|---------|
+| HEADER | 4 B | Direction magic, different per direction so a parser knows who sent it and can resync |
+| COMMAND | 4 B | Opcode `0x0000RRNN`; the response echoes it unchanged |
+| LENGTH | 4 B | `n`, the **true** payload byte count. May be 0. Capped at `PROTOCOL_MAX_DATA` |
+| DATA | `round4(n)` B | Payload, zero-padded to a multiple of 4. Pad bytes are 0 and **are covered by the CRC**; only the first `n` reach a handler |
+| CRC32 | 4 B | IEEE CRC-32 (poly `0xEDB88320`, reflected, init and xorout `0xFFFFFFFF` — the zlib/Ethernet CRC) over HEADER..DATA |
+
+Every field being 4-byte aligned is what makes the frame a multiple of 4 and puts
+the CRC on a boundary. Minimum frame is **16 bytes** (`n = 0`); maximum is
+`PROTOCOL_MAX_FRAME` = 32788.
+
+Header corruption is caught, because the CRC covers the header too.
+
+## Direction magic
+
+| Direction | Name | Bytes on the wire | As a little-endian word |
+|-----------|------|-------------------|-------------------------|
+| host → device | `PROTOCOL_HDR_REQ` | `52 51 3E 3E` ("RQ>>") | `0x3E3E5152` |
+| device → host | `PROTOCOL_HDR_RSP` | `52 53 3C 3C` ("RS<<") | `0x3C3C5352` |
+
+ASCII-ish so a hex dump is readable, and differing in every direction-carrying
+byte so a single flipped bit cannot turn one into the other.
+
+## Responses
+
+`RSP.DATA` is always `[STATUS:4][payload]`, so `RSP.LENGTH` is
+`PROTOCOL_STATUS_LEN + payload_len`. The status is a signed little-endian word:
+
+| Value | Name | Meaning |
+|-------|------|---------|
+| `0` | `PROTOCOL_OK` | success, including every "nothing is there" answer |
+| `-1` | `PROTOCOL_ERR_CRC` | **never transmitted** — a bad-CRC request is dropped without a reply, because its COMMAND cannot be trusted enough to echo. The firmware reuses this value internally to mean "already answered" |
+| `-2` | `PROTOCOL_ERR_BAD_CMD` | this spec does not define the opcode at all |
+| `-3` | `PROTOCOL_ERR_BAD_LEN` | `LENGTH` wrong for this command |
+| `-4` | `PROTOCOL_ERR_BAD_ARG` | payload value rejected |
+| `-5` | `PROTOCOL_ERR_STATE` | right command, wrong device state; retryable |
+| `-6` | `PROTOCOL_ERR_HW` | the driver underneath failed |
+| `-7` | `PROTOCOL_ERR_UNSUPPORTED` | defined here, not built into this firmware |
+
+`-2` versus `-7` is the difference a tool acts on: `-2` says fix the request,
+`-7` says the request is fine and the build cannot serve it.
+
+## Constants
+
+| Constant | Value | Why |
+|----------|-------|-----|
+| `PROTOCOL_PREFIX_LEN` | 12 | HEADER + COMMAND + LENGTH |
+| `PROTOCOL_OVERHEAD_LEN` | 16 | the prefix plus the CRC |
+| `PROTOCOL_MAX_DATA` | 32772 | one 32 KB `UPG_WRITE` chunk plus its 4-byte offset |
+| `PROTOCOL_MAX_FRAME` | 32788 | `PROTOCOL_OVERHEAD_LEN + PROTOCOL_MAX_DATA` |
+| `PROTOCOL_STATUS_LEN` | 4 | the status opening every response |
+| `PROTOCOL_UPG_CHUNK_MIN` | 4096 | floor on a proposed `chunk_max` |
+| `PROTOCOL_UPG_CHUNK_MAX` | 32768 | protocol ceiling on a chunk |
+| `PROTOCOL_UPG_CHUNK_CAP` | 32768 | largest `chunk_max` this build accepts |
+| `PROTOCOL_UPG_CHUNK_STEP` | 1024 | the step the band moves in |
+| `PROTOCOL_UPG_BEGIN_LEN` | 13 | `[target:1][img_size:4][img_crc32:4][chunk_max:4]` |
+| `PROTOCOL_VERSION_LEN` | 32 | the VERSION block, two 16-byte fields |
+| `PROTOCOL_MAC_LEN` | 6 | either MAC |
+
+## What the size costs
+
+`PROTOCOL_MAX_DATA` = 32772 buys the fewest frames per image: a 13.875 MB
+`app_firmware` is about 425 chunks at 32 KB rather than ~3400 at 4 KB. The price
+is static RAM, and this build spends **two** buffers of that order rather than
+the three the source spec budgets:
+
+| Buffer | Where | Bytes |
+|--------|-------|-------|
+| parser window | `protocol_parser_t` in `app_ctx_t` | 32788 + 8 |
+| reply frame | `command_t` in `app_ctx_t` | 32788 |
+
+A response body is built straight into the reply frame, which is what removes
+the third. **Measured, not estimated:** `tool-esp.py size` reports `.bss` at
+70,592 bytes total — 20.66 % of DRAM — of which about 65.6 KB is these two.
+Roughly 270 KB of DRAM is left, against the ~40–50 KB a TLS OTA fetch wants.
+
+Lowering `PROTOCOL_MAX_DATA` lowers the accepted chunk band with it, so the two
+move together or the band stops fitting a frame.
+
+## Invariants a reader must enforce
+
+1. `LENGTH > PROTOCOL_MAX_DATA` is rejected **while the length is read**, and
+   the hunt resumes from the byte after the failed header. Nothing is allocated
+   on the receive path.
+2. A CRC mismatch drops the frame silently — **no response at all**.
+3. `round4(n)` pad bytes are inside the CRC and outside the handler's view.
+4. `COMMAND` is never `0x00000000`: item numbering starts at `0x01` in every
+   range, so the value a zeroed buffer produces cannot be a command.
+
+## See also
+
+- [../interface/protocol-api.md](../interface/protocol-api.md) — the codec contract
+- [../behavior/usb-command-dispatch.md](../behavior/usb-command-dispatch.md) — what happens to a decoded frame
+- [../behavior/usb-host-flow.md](../behavior/usb-host-flow.md) — the host's sequence
+
 ### [interface] Project Status API (fw)
 *`interface/fw-status-api.md` - The contract of the project-wide status type and its name lookup. - status: active - source: middleware/fw/include/fw.h, middleware/fw/src/fw.c:25-56 - keywords: fw.h, fw_err_t, fw_err_str, FW_OK, FW_ERR_IO, fw_err_t codes*
 
@@ -1425,6 +1623,355 @@ Each of these stops the run before a byte changes, and each names its fix:
 - [../rule/versioning-and-release.md](../rule/versioning-and-release.md) — the procedure this automates
 - [../architecture/ci-pipeline.md](../architecture/ci-pipeline.md) — the two workflows it waits on
 
+### [interface] Protocol Codec API
+*`interface/protocol-api.md` - The contract for parsing USB request frames, building response frames, and looking an opcode up. - status: active - source: middleware/protocol/include/protocol.h - keywords: protocol.h, protocol_parser_feed, protocol_parser_reset, protocol_rsp_build, protocol_cmd_lookup, protocol_status_str, protocol_round4, protocol_parser_t, protocol_req_t, protocol_cmd_info_t*
+
+# Protocol Codec API
+
+> A byte-fed request parser, a response builder, and the opcode map. No SDK
+> dependency beyond the ROM CRC, so the whole thing runs on a host.
+
+## Responsibility
+
+`middleware/protocol` owns the wire format and nothing else: it neither knows
+what a command means nor how bytes reach it. That is what makes it the one part
+of the channel the host suite can exercise completely.
+
+## Types
+
+| Type | Role |
+|------|------|
+| `protocol_status_t` | The wire status, `0` and `-1`..`-7`. See [../data/usb-frame-format.md](../data/usb-frame-format.md) |
+| `protocol_cmd_kind_t` | `PROTOCOL_CMD_SERVED` or `PROTOCOL_CMD_UNSUPPORTED` |
+| `protocol_cmd_info_t` | One map row: `command`, `req_len`, `kind` |
+| `protocol_req_t` | An accepted request: `command`, `len`, `data` |
+| `protocol_parser_t` | Caller-allocated parser, `PROTOCOL_MAX_FRAME` + two lengths |
+
+`req_len` is the exact REQ `LENGTH` a command takes, or `PROTOCOL_LEN_ANY`
+(`UINT32_MAX`) when only the handler can judge it.
+
+`protocol_req_t.data` points **into the parser** and is valid only until the
+next `protocol_parser_feed()` on that instance. A handler needing the bytes
+longer copies them.
+
+## Signatures
+
+```c
+static inline uint32_t protocol_round4(uint32_t n);
+const char *protocol_status_str(protocol_status_t status);
+const protocol_cmd_info_t *protocol_cmd_lookup(uint32_t command);
+void protocol_parser_reset(protocol_parser_t *parser);
+bool protocol_parser_feed(protocol_parser_t *parser, uint8_t byte, protocol_req_t *out_req);
+uint32_t protocol_rsp_build(uint8_t *out, uint32_t out_cap, uint32_t command,
+                            protocol_status_t status, const uint8_t *payload,
+                            uint32_t payload_len);
+```
+
+| Function | Returns | Notes |
+|----------|---------|-------|
+| `protocol_round4` | `n` rounded up to a multiple of 4 | header-inline; used by tests and by any host tool |
+| `protocol_status_str` | a string literal, never NULL | unknown values give `"PROTOCOL_ERR_UNKNOWN"`; no `default:` label, so `-Wswitch-enum` fails the build when a status is added without a name |
+| `protocol_cmd_lookup` | the row, or **NULL** | NULL means the spec never defined this opcode, which the caller answers `-2`. A row whose `kind` is `UNSUPPORTED` is answered `-7` |
+| `protocol_parser_reset` | — | clears the two lengths only; the 32 KB buffer is not wiped, because nothing reads past `len` |
+| `protocol_parser_feed` | `true` when this byte completed a CRC-valid request | one caller per instance |
+| `protocol_rsp_build` | bytes written, or **0** | 0 means an impossible argument or a buffer too small, and `out` is left untouched, so a caller can send nothing rather than a truncated frame |
+
+## Parser behaviour
+
+The receiver never trusts `LENGTH` blindly:
+
+1. Hunt for `PROTOCOL_HDR_REQ`, sliding one byte at a time over anything else.
+2. Read COMMAND and LENGTH. `LENGTH > PROTOCOL_MAX_DATA` abandons the frame and
+   resumes hunting **from the byte after the failed header** — not from behind
+   the frame that header described, or one corrupt length would swallow every
+   frame behind it.
+3. Collect `round4(n)` DATA bytes plus the CRC.
+4. Verify the CRC over HEADER..DATA, padding included. A mismatch drops the
+   frame **with no response** and resumes the hunt the same way.
+
+A rejected candidate is resynced with **one forward scan and one move**, not a
+shift per byte: a 32 KB frame failing its CRC would otherwise cost a 32 KB
+`memmove` for every byte behind it, which is a denial of service a host can
+trigger with garbage.
+
+An accepted frame is left in the buffer so `req.data` stays readable; the next
+feed drops it and re-examines whatever followed, so a second request already in
+the buffer surfaces one byte later at worst.
+
+## CRC
+
+`esp_rom_crc32_le(0, buf, len)` on target — the same call
+`middleware/storage` uses. The host suite supplies a **deliberately independent**
+bitwise implementation in `test/host/stub/esp_rom_crc.h`, and a known-answer
+test pins both to `crc32("123456789") == 0xCBF43926`. Without that vector a
+wrong CRC would agree with itself and pass everything.
+
+## See also
+
+- [../data/usb-frame-format.md](../data/usb-frame-format.md) — the format itself
+- [command-map.md](command-map.md) — every opcode and its verdict
+- [../rule/testing.md](../rule/testing.md) — how the host suite runs
+
+### [interface] USB CDC Transport API
+*`interface/usb-cdc-api.md` - The driver contract for the CDC-ACM byte pipe, its VID/PID, and the PHY it takes from USB-Serial-JTAG. - status: active - source: driver/usb_cdc/include/usb_cdc.h, driver/usb_cdc/src/usb_cdc.c, driver/usb_cdc/idf_component.yml - keywords: usb_cdc.h, usb_cdc_init, usb_cdc_deinit, usb_cdc_write, usb_cdc_is_mounted, usb_cdc_err_str, usb_cdc_err_t, USB_CDC_VID, USB_CDC_PID, esp_tinyusb, TinyUSB, internal PHY*
+
+# USB CDC Transport API
+
+> A byte pipe to a PC on the USB-OTG peripheral, enumerating as
+> `A331:F001`. Bringing it up **turns USB-Serial-JTAG off**.
+
+## Responsibility
+
+`driver/usb_cdc` owns the vendor USB stack and nothing above it: bytes in, bytes
+out. It never sees a frame. Sitting in the driver layer it must not include
+`fw.h` (R-LAY-01), so it carries `usb_cdc_err_t` — the same arrangement
+`driver/bsp` has.
+
+## Identity
+
+| Constant | Value | Why it is a constant |
+|----------|-------|----------------------|
+| `USB_CDC_VID` | `0xA331` | Fixed for this product. A knob for a value that never changes is a knob that can be set wrong |
+| `USB_CDC_PID` | `0xF001` | Same, and it matches the product id |
+| `USB_CDC_WRITE_TIMEOUT_MS` | 1000 | per flush attempt |
+
+They are set at **runtime**, through the descriptor the module supplies to
+`esp_tinyusb`, not through `CONFIG_TINYUSB_DESC_CUSTOM_*` — so there is no
+menuconfig value that can drift from the header. Only the device descriptor and
+the five string descriptors are ours; the configuration descriptor is left NULL
+so the component builds its own CDC one and owns the endpoint numbering.
+
+## Status codes
+
+| Code | Value | Meaning |
+|------|-------|---------|
+| `USB_CDC_OK` | 0 | succeeded |
+| `USB_CDC_ERR_PARAM` | -1 | impossible argument |
+| `USB_CDC_ERR_STATE` | -2 | wrong lifecycle state |
+| `USB_CDC_ERR_TIMEOUT` | -3 | the host stopped draining the TX FIFO |
+| `USB_CDC_ERR_IO` | -7 | the vendor SDK refused |
+| `USB_CDC_ERR_NO_MEM` | -9 | the stack could not be built |
+| `USB_CDC_ERR_NOT_MOUNTED` | -20 | no host has configured the device |
+
+`-1 .. -19` keep their project-wide meanings (R-ERR-03), so a caller maps them
+onto `fw_err_t` one for one; `-20` upward is this module's own space.
+
+## Signatures
+
+```c
+typedef void (*usb_cdc_rx_cb_t)(void *ctx, const uint8_t *data, size_t len);
+
+const char *usb_cdc_err_str(usb_cdc_err_t err);
+usb_cdc_err_t usb_cdc_init(usb_cdc_t *dev, const usb_cdc_cfg_t *cfg);
+usb_cdc_err_t usb_cdc_deinit(usb_cdc_t *dev);
+usb_cdc_err_t usb_cdc_write(usb_cdc_t *dev, const uint8_t *data, size_t len);
+bool usb_cdc_is_mounted(const usb_cdc_t *dev);
+```
+
+`usb_cdc_cfg_t` carries only `on_rx` (required) and `rx_ctx`.
+
+| Function | Contract |
+|----------|----------|
+| `usb_cdc_init` | Installs the stack and enumerates. **One instance per image, enforced**: the TinyUSB CDC callback signature carries no context pointer, so the module has to keep a static handle to the instance those callbacks belong to. OK means the stack runs, not that a host is attached |
+| `usb_cdc_deinit` | Tears the stack down and releases the PHY. Repeatable, safe on a half-built instance. Does **not** restore USB-Serial-JTAG |
+| `usb_cdc_write` | Loops queue-then-flush, because the TX FIFO is 512 bytes and a maximum reply is 32788. A host that opened the port and stopped reading is `USB_CDC_ERR_TIMEOUT` after three stalled attempts, not a hang |
+| `usb_cdc_is_mounted` | May be stale on return, which is all a "should I bother replying" check needs. Tracked from the driver's ATTACHED/DETACHED events into a `volatile bool` |
+
+`on_rx` runs on the **TinyUSB service task**, which is also the only task
+draining the CDC RX FIFO. Blocking there stalls the whole channel, so the
+reference wiring does nothing in it but push bytes into a stream buffer — see
+[../behavior/boot-and-bring-up.md](../behavior/boot-and-bring-up.md).
+
+## The dependency, and the PHY
+
+ESP-IDF v6.1 ships **no USB device stack**: its `components/` holds
+`esp_driver_usb_serial_jtag`, `esp_hal_usb` and `esp_usb_cdc_rom_console` and no
+TinyUSB. So `driver/usb_cdc/idf_component.yml` declares
+`espressif/esp_tinyusb: "~2.0.0"` — the repo's first managed dependency, which
+also pulls `espressif/tinyusb`. `managed_components/` and `dependencies.lock`
+are gitignored, so a fresh clone resolves them on its first build and needs
+network for it.
+
+**The ESP32-S3 has one internal USB PHY, time-division shared between USB-OTG
+and USB-Serial-JTAG** (TRM 32.3.1 and 33.3.1) — only one works at a time, and
+`tinyusb_driver_install()` switches it to USB-OTG with no way to ask otherwise.
+Consequences, all of them deliberate:
+
+- the console and boot log are on **UART0** (GPIO43/44), not on USB;
+- `tool-esp.py flash` loses its USB auto-download reset — flash over UART0, or
+  hold BOOT;
+- `EFUSE_USB_PHY_SEL` must **never** be burned: it is one-way and would take
+  USB-Serial-JTAG download away in the bootloader too.
+
+The pins are recorded as constants in `driver/bsp/include/bsp.h`
+(`BSP_USB_DP_GPIO` 20, `BSP_USB_DM_GPIO` 19, `BSP_CONSOLE_UART_TX_GPIO` 43,
+`BSP_CONSOLE_UART_RX_GPIO` 44), cited to `soc/usb_pins.h` and
+`soc/uart_pins.h`. They are constants and not board-table rows because no board
+revision can move them.
+
+## See also
+
+- [bsp-api.md](bsp-api.md) — where the pins live
+- [../architecture/layering-and-dependencies.md](../architecture/layering-and-dependencies.md) — the third error code space
+- [../rule/known-deviations.md](../rule/known-deviations.md) — the console move, recorded as a deviation
+
+### [interface] USB Command Map
+*`interface/command-map.md` - Every opcode the protocol defines, which ten this build serves, and why each of the rest answers -7. - status: active - source: middleware/protocol/src/protocol.c, middleware/protocol/include/protocol.h, middleware/command/src/command.c - keywords: command map, opcode, PROTOCOL_CMD_SERVED, PROTOCOL_CMD_UNSUPPORTED, PROTOCOL_ERR_BAD_CMD, PROTOCOL_ERR_UNSUPPORTED, RESTART_APP, PING, BOOT_SLOT, VERSION, WIFI_MAC, BLE_MAC, UPG_BEGIN, UPG_WRITE, UPG_END, retired item*
+
+# USB Command Map
+
+> 46 opcodes are defined; **ten** are served. The other 36 exist in the table
+> only so they can answer `-7` instead of `-2`.
+
+## Why the unserved rows exist
+
+The source spec was written for product 0x0001 — an ESP32-P4 with an LCD, a
+touch panel, an SD card, Ethernet, Wi-Fi and a config registry. **This board has
+none of them.** The wire format, the parser rules and the opcode numbers are
+adopted verbatim; only the opcodes this hardware can honestly answer get a
+handler.
+
+Keeping the rest in the map is what makes the distinction possible:
+
+- an opcode **absent** from the map answers `PROTOCOL_ERR_BAD_CMD` (`-2`) — the
+  spec does not define it, so fix the request;
+- an opcode **present but not served** answers `PROTOCOL_ERR_UNSUPPORTED`
+  (`-7`) — the request is right and this build cannot serve it, so the fix is a
+  different build.
+
+Without the unserved rows, a host asking for `CHK_LCD` would be told "no such
+command", which is a lie.
+
+A **retired** item stays absent on purpose. Get System `0x06` was `PRODUCT_ID`
+and is gone; a tool built against the old map gets `-2` and learns the command
+disappeared, rather than reaching whatever number took its place.
+
+## Served (ten)
+
+| COMMAND | Name | REQ.DATA | RSP payload after STATUS |
+|---------|------|----------|--------------------------|
+| `0x0001` | RESTART_APP | — | — reply first, wait 100 ms, then reset |
+| `0x0006` | PING | 0..32768 B, any | the request's DATA, byte for byte |
+| `0x0101` | Set BOOT_SLOT | `[slot:1]` | — arms the **next** boot |
+| `0x0201` | VERSION | — | `[0:16]` running updater, `[16:32]` `app_firmware` slot |
+| `0x0202` | Get BOOT_SLOT | — | `[slot:1]` the slot running **now** |
+| `0x0203` | WIFI_MAC | — | `[mac:6]` from eFuse |
+| `0x0204` | BLE_MAC | — | `[mac:6]` from eFuse |
+| `0x0601` | UPG_BEGIN | `[target:1][img_size:4][img_crc32:4][chunk_max:4]` | — |
+| `0x0602` | UPG_WRITE | `[offset:4][chunk]` | — |
+| `0x0603` | UPG_END | — | — verifies and finalises; arms nothing |
+
+`slot` and `target` share one encoding: `0` = `app_updater` (ota_0), `1` =
+`app_firmware` (ota_1). Two encodings for one pair of slots is a bug waiting to
+happen.
+
+Both MACs come from eFuse, which is why they are served with no radio brought up
+and no BLE stack linked — and why every ATE hardware check is not.
+
+## Unsupported, by range, with the reason
+
+| Range | Items | Why `-7` here |
+|-------|-------|---------------|
+| Action `0x00` | `02` FACTORY_RESET | Nothing in this repo owns a CFG region. `cfg_setting` exists as a raw partition with no reader or writer |
+| Action `0x00` | `03` WIFI_CONNECT, `04` WIFI_SCAN, `05` NET_STATUS | No Wi-Fi driver in this repo at all; networking is not brought up here |
+| Set/Get System | `0x0102`/`0x0205` GUID | No identity store. `cfg_factory` is an unowned raw partition |
+| Set Config `0x03` | `01` MSC_ENABLE, `03` LANGUAGE, `04` BLE_NAME, `06` CUSTOMER_ID, `07` LCD_BRIGHTNESS, `08` LOG_LEVEL, `0A` NET_MODE | No config registry, and no SD card, display, BLE name or network mode to configure |
+| Get Config `0x04` | the same rows plus `05` WIFI_STA, `09` LOG_TAGS, `FF` CFG_VER | Same. A **set** on a read-only row (`05`, `09`, `FF`) is absent from the map rather than unsupported, because it is not a command at all — so it answers `-2` |
+| ATE `0x05` | `01`–`03` provisioning, `10`–`19` hardware checks | No identity store, and no LCD, touch panel, LED, BLE stack, Wi-Fi, Ethernet PHY, SD card or RTC on this board |
+
+## Length before value
+
+Each row carries the exact REQ `LENGTH` its command takes, or
+`PROTOCOL_LEN_ANY` when only the handler can judge it. The width is checked
+**before** any value is looked at, so a two-byte `BOOT_SLOT` payload is `-3`
+whatever it contains while a one-byte payload carrying `2` is `-4`. A tool is
+always told which half of its request to fix.
+
+## Keeping this honest
+
+`middleware/command/test/test_command.c` walks the whole 16-bit opcode space and
+asserts that **exactly** the ten opcodes above report `PROTOCOL_CMD_SERVED`. An
+opcode drifting into or out of the set fails there rather than on a bench.
+
+## See also
+
+- [../behavior/usb-command-dispatch.md](../behavior/usb-command-dispatch.md) — what each served handler does
+- [../behavior/usb-upgrade-session.md](../behavior/usb-upgrade-session.md) — the `0x06` range in detail
+- [protocol-api.md](protocol-api.md) — the lookup that returns these rows
+- [../rule/known-deviations.md](../rule/known-deviations.md) — the ranges left at `-7`, as a deviation
+
+### [interface] USB Tool CLI (tool-usb.py)
+*`interface/tool-usb-cli.md` - The command surface of the host-side USB tool and what each subcommand puts on the wire. - status: active - source: docs/scripts/tool-usb.py - keywords: tool-usb.py, selftest, ping, version, boot-slot, restart, upgrade, --arm, --chunk, --target, --bytes, --timeout, pyserial, VID PID detection*
+
+# USB Tool CLI (tool-usb.py)
+
+> The host half of the command channel, so the wire format can be exercised
+> against a real board and not only against the host suite.
+
+## Contract
+
+Invoked as `python docs/scripts/tool-usb.py <command> [argument] [flags]`.
+
+| Command | Puts on the wire | Notes |
+|---------|------------------|-------|
+| `selftest` | nothing | **No board and no pyserial needed.** Checks `crc32("123456789") == 0xCBF43926` and five frame round trips |
+| `ping` | `0x0006` | `--bytes N` sets the payload size, default 64. Fails if the echo differs by a byte |
+| `version` | `0x0201` then `0x0202` | Prints both version fields and the running slot. A blank slot prints `(unset)` rather than an empty line |
+| `boot-slot SLOT` | `0x0101` | `SLOT` is 0 or 1. Says "armed for the next boot" and does **not** read it back, because a Get would report the old value |
+| `restart` | `0x0001` | The port re-enumerates afterwards |
+| `upgrade FILE` | `0x0601` → N × `0x0602` → `0x0603` | Prints per-chunk progress. Arms nothing unless `--arm` |
+
+| Flag | Applies to | Meaning |
+|------|-----------|---------|
+| `-p` / `--port` | every command but `selftest` | e.g. `COM7`. Omit to detect |
+| `--bytes` | `ping` | payload size, default 64 |
+| `--target` | `upgrade` | `1` `app_firmware` (default), `0` `app_updater` |
+| `--chunk` | `upgrade` | 4096..32768, multiple of 1024. Default 32768 |
+| `--arm` | `upgrade` | after a successful `UPG_END`, also send `Set BOOT_SLOT` and `RESTART_APP` |
+| `--timeout` | every command but `selftest` | seconds to wait for one response, default 5 |
+
+**A flag that does not apply is rejected, not ignored** — `selftest -p COM7`,
+`ping --arm` and `version --bytes 8` each exit non-zero saying what the flag is
+for. Same rule as `tool-esp.py`: a flag that silently does nothing is one
+somebody will believe in.
+
+## Finding the port
+
+Detection matches on the device's own **VID:PID `A331:F001`**, not on "the one
+serial port", so a bench with other adapters attached still works. No match
+lists every port on the machine and says to plug the cable into the OTG port;
+two matches is an error rather than a coin flip, because guessing between two
+boards is how an image lands on the wrong one.
+
+## Checked before the port opens
+
+`--chunk` and the image file are validated **before** the serial port is
+touched, for the same reason the firmware checks every `UPG_BEGIN` argument
+before it erases anything: a request that was never going to work should cost
+nothing, and a bad `--chunk` reported as a port error sends the reader looking
+in the wrong place.
+
+## Dependencies
+
+`pyserial`, and only for the commands that talk to a board — the import is
+deferred so `selftest` and `--help` work without it. Frames are built and
+checked with Python's own `zlib.crc32`, so no CRC implementation is written
+here either.
+
+## The constants are copies
+
+`middleware/protocol/include/protocol.h` is the authority on every opcode and
+constant; the copies in this script exist because it has to run without the
+firmware's build. **When the two disagree, the header is right.** `selftest`
+pins the CRC against the same fixed vector the firmware's own tests use, which
+holds both implementations to one value rather than to each other.
+
+## See also
+
+- [../behavior/usb-host-flow.md](../behavior/usb-host-flow.md) — the sequence this automates
+- [command-map.md](command-map.md) — every opcode
+- [tool-esp-cli.md](tool-esp-cli.md) — the build and flash entry point
+
 ### [behavior] Boot and Bring-Up
 *`behavior/boot-and-bring-up.md` - What runs from app_main to the main loop, in what order, and what happens when a step fails. - status: active - source: application/app/src/app.c:64-174, application/app/src/app.c:195-210 - keywords: app_main, app_run, print_banner, APP_GIT_COMMIT, bring_up_storage, bring_up_bsp, bring_up_updater, confirm_or_roll_back, on_updater_state, now_ms, APP_TICK_MS*
 
@@ -1751,6 +2298,392 @@ implement its own two-slot scheme.
 
 - [../data/storage-record.md](../data/storage-record.md) — the shape and its invariants
 - [../interface/storage-api.md](../interface/storage-api.md) — the contract
+
+### [behavior] USB Host Flow
+*`behavior/usb-host-flow.md` - How a PC drives a 0xF001 unit over USB end to end, what each step proves, and which handlers hold the channel. - status: active - source: docs/scripts/tool-usb.py, middleware/command/src/command.c, middleware/command/src/command_upgrade.c, middleware/protocol/src/protocol.c - keywords: usb host flow, PING, VERSION, BOOT_SLOT, UPG_BEGIN, UPG_WRITE, UPG_END, RESTART_APP, tool-usb.py, chunk_max, blocking, time budget*
+
+# USB Host Flow
+
+> Plug a cable in, prove the channel, push an image into `app_firmware`, arm it,
+> reboot. Written for someone who has not read the frame format.
+
+The wire format and the opcode numbers are
+[../data/usb-frame-format.md](../data/usb-frame-format.md) and
+[../interface/command-map.md](../interface/command-map.md). This file is the
+authority on **the order things happen in and why**.
+
+## Overview
+
+```mermaid
+flowchart TD
+    A[Plug the USB-OTG cable in<br/>COM port appears, A331:F001] --> B[Prove the channel<br/>0x0006 PING]
+    B --> C[Read the unit<br/>0x0201 VERSION · 0x0202 Get BOOT_SLOT]
+    C --> D{Transferring an image?}
+    D -- no --> Z[Done]
+    D -- yes --> E[0x0601 UPG_BEGIN<br/>target · img_size · img_crc32 · chunk_max]
+    E --> F[N x 0x0602 UPG_WRITE<br/>offset · chunk]
+    F --> G[0x0603 UPG_END<br/>verifies whole image, finalises slot]
+    G --> H[0x0101 Set BOOT_SLOT<br/>arms the NEXT boot]
+    H --> I[0x0001 RESTART_APP<br/>reply first, then reset]
+    I --> J[Port re-enumerates]
+    J --> K[0x0201 VERSION again<br/>confirm the new image is running]
+```
+
+Ordering principle: **prove the channel, then read, then write, then arm, then
+reboot.** Nothing before UPG_END can make a slot bootable, so every step up to
+it is safe to abandon.
+
+## The steps
+
+| # | Step | Opcode | What it does | What it proves on the board | Pass when | Operator |
+|---|------|--------|--------------|-----------------------------|-----------|----------|
+| 0 | Power and plug | — | USB-OTG cable into the port on GPIO19/20 | supply, USB PHY, firmware booted, descriptors right | a COM port appears with hardware id `USB\VID_A331&PID_F001` | plug the cable |
+| 1 | Handshake | `0x0006` PING | send a few bytes, wait for the echo | the command channel is alive, framing and CRC32 work both ways | the payload returns byte for byte | — |
+| 2 | Read versions | `0x0201` VERSION | read the 32-byte block | which image runs, and what sits in the firmware slot | `[0:16]` is the expected updater version; `[16:32]` is the firmware slot, or 16 zero bytes when it was never written | log both |
+| 3 | Read the slot | `0x0202` Get BOOT_SLOT | ask which slot is running | the bootloader picked what was expected | `0` on a unit running the updater | — |
+| 4 | Identity | `0x0203`/`0x0204` | read the Wi-Fi and BLE MACs from eFuse | the part is the part it claims to be | six bytes each, differing in the last byte | log both |
+| 5 | Open a transfer | `0x0601` UPG_BEGIN | declare target, size, CRC32 and chunk size; the slot is erased | the target slot is erasable and the image fits it | `0`; anything else means nothing was erased | — |
+| 6 | Send the image | `0x0602` UPG_WRITE × N | one chunk per frame, strictly in order | the flash accepts every byte | `0` for every chunk | watch the progress |
+| 7 | Verify and finalise | `0x0603` UPG_END | check the whole-image CRC32, mark the slot valid | the bytes that landed are the bytes that were sent | `0`; `-6` means the image did not survive the trip | — |
+| 8 | Arm | `0x0101` Set BOOT_SLOT | write `otadata` for the **next** boot | `otadata` is writable and the image validates | `0`; `-5` means the slot holds no valid image | — |
+| 9 | Reboot | `0x0001` RESTART_APP | reply, wait 100 ms, reset | the reply leaves before the reset | `0`, then the port disappears | — |
+| 10 | Re-enumerate | — | wait for the port to come back | the new image boots and brings USB up | the COM port reappears | — |
+| 11 | Confirm | `0x0201` VERSION | read the block again | **the new image is the one running** | `[0:16]` is the version that was just transferred | log it |
+
+**Step 11 is the one most often skipped and the only one that proves the
+upgrade worked.** Everything before it proves bytes moved; only this proves the
+unit boots them.
+
+`docs/scripts/tool-usb.py` automates steps 1 to 9:
+`upgrade FILE --arm` runs 5 through 9 in one go, and `version` covers 2 and 3.
+
+## The ordering that is not negotiable
+
+1. **UPG_END before Set BOOT_SLOT.** UPG_END is the only thing that marks a
+   slot valid. Arming a slot that never finished means arming an image that was
+   never verified — and on a unit whose only other slot holds the updater, that
+   is the one mistake with no way back over USB.
+2. **Set BOOT_SLOT before RESTART_APP.** Obvious in hindsight, and the reason
+   `tool-usb.py upgrade` refuses to reboot without `--arm`.
+3. **A Set followed by a Get reads the OLD slot.** Set arms the next boot; Get
+   reports what is running now. They are asymmetric on purpose, so a tool must
+   say "will boot X after restart" rather than read the value back and call the
+   difference a failure.
+4. **One command at a time, and wait for each answer.** The protocol is
+   synchronous and the device serves one frame at a time; a host that sends
+   ahead can overflow the 512-byte CDC RX FIFO, and the symptom is a corrupted
+   *next* command rather than an error code.
+5. **Retry is UPG_BEGIN again.** There is no abort opcode. A host that gave up
+   half way, picked the wrong file, or lost the cable simply starts over; the
+   device frees the old session first, so retrying does not leak a handle.
+
+## STATUS per item
+
+Every failure this channel can report, and which item produces it.
+
+| STATUS | Where it comes from |
+|--------|---------------------|
+| `0` OK | success, including the "never written" answers — a firmware slot with no image reads back as 16 zero bytes with OK |
+| `-2` BAD_CMD | an opcode this spec does not define at all, including retired ones such as Get System `0x06` (once `PRODUCT_ID`) and the all-zero word |
+| `-3` BAD_LEN | wrong payload width: BOOT_SLOT not 1 B, UPG_BEGIN not 13 B, UPG_WRITE under 4 B, a PING over 32768 B (see the note below). And every chunk rule: empty, over `chunk_max`, over 32768, past `img_size`, or not a multiple of 1024 when it is not the last |
+| `-4` BAD_ARG | value rejected: a slot that is neither 0 nor 1, an unknown `target`, an `img_size` of zero or past the partition, a `chunk_max` outside 4096..32768 or not a multiple of 1024 |
+| `-5` STATE | Set BOOT_SLOT on a slot with no valid image; UPG_BEGIN aimed at the running slot or arriving while the HTTP update cycle is writing; UPG_WRITE or UPG_END with no session open, at the wrong offset, or short of `img_size`. **Always retryable in principle** |
+| `-6` HW | a MAC that could not be read; a flash erase or write that failed; an image whose CRC32 did not match at UPG_END |
+| `-7` UNSUPPORTED | every opcode the spec defines that this board cannot serve — the whole ATE range, all of Config, Wi-Fi and the network items, and FACTORY_RESET. See [../rule/known-deviations.md](../rule/known-deviations.md) |
+
+Length is always checked **separately from** value, and before it: a two-byte
+BOOT_SLOT payload is `-3` whatever it contains, while a one-byte payload
+carrying `2` is `-4`. Merging them would leave a tool guessing which half of
+its request to fix.
+
+> **A gap in the source spec, resolved here.** It says PING echoes 0 to
+> `PROTOCOL_MAX_DATA` bytes *and* that the reply carries `4 + REQ.LENGTH` —
+> which at the cap asks for a reply of 32776 bytes, past that same cap. The
+> real ceiling is `PROTOCOL_MAX_DATA - PROTOCOL_STATUS_LEN` = **32768**, and
+> 32769..32772 answer `-3` rather than a truncated echo. `UPG_WRITE` is
+> unaffected: its reply carries a status and nothing else, which is exactly why
+> `PROTOCOL_MAX_DATA` is 32772 in the first place.
+
+## Which handlers hold the channel
+
+Dispatch runs on its own task, but that task is the only one parsing frames, so
+a slow handler delays the *next* command. Nothing here blocks for long, which is
+what makes the synchronous protocol comfortable on this product.
+
+| Item | Holds the channel for |
+|------|----------------------|
+| `0x0602` UPG_WRITE | one flash write, tens of milliseconds at 4–32 KB |
+| `0x0603` UPG_END | the image validation `esp_ota_end()` performs |
+| `0x0601` UPG_BEGIN | the target slot erase |
+| `0x0001` RESTART_APP | 100 ms of grace, then the chip resets |
+| everything else | microseconds — an eFuse read, a table lookup, a `memcpy` |
+
+There is no `CHK_TOUCH`-style handler that waits on a human, which is the one
+class of blocking the source spec had to clamp. The rule still stands: send one
+command, wait for its answer.
+
+## Time budget
+
+A 13.875 MB `app_firmware` image at the 32 KB ceiling:
+
+| Part | Cost |
+|------|------|
+| chunks | ~425 frames |
+| per frame | one 32 KB OUT transfer plus a 16-byte reply |
+| USB full speed | ~1 MB/s in practice, so ~14 s of wire time |
+| flash writes | the same 13.875 MB, overlapping the transfers |
+| steps 1–4 and 8–11 | under a second in total |
+
+So a full firmware transfer is **tens of seconds**, dominated by the image
+itself. Dropping `chunk_max` to the 4 KB floor multiplies the frame count by
+eight, which is why the floor exists rather than allowing smaller.
+
+## See also
+
+- [../data/usb-frame-format.md](../data/usb-frame-format.md) — the wire format
+- [../interface/command-map.md](../interface/command-map.md) — every opcode
+- [usb-upgrade-session.md](usb-upgrade-session.md) — the session rules in detail
+- [../interface/tool-usb-cli.md](../interface/tool-usb-cli.md) — the script that automates this
+
+### [behavior] USB Command Dispatch
+*`behavior/usb-command-dispatch.md` - The order the dispatcher decides things in, and what each served handler does. - status: active - source: middleware/command/src/command.c, middleware/command/include/command.h, middleware/command/test/test_command.c - keywords: command_on_frame, command_init, command_deinit, serve, handle_restart_app, handle_set_boot_slot, handle_get_version, handle_get_boot_slot, handle_get_mac, command_reply_cb_t, command_busy_cb_t, COMMAND_RESTART_GRACE_MS*
+
+# USB Command Dispatch
+
+> One decoded request in, exactly one response out. The order of the checks is
+> the contract, not an implementation detail.
+
+## The order, and why it is fixed
+
+`command_on_frame()` decides in this sequence, and stops at the first answer:
+
+1. **Not in the map** → `PROTOCOL_ERR_BAD_CMD` (`-2`). Decided by the opcode
+   alone, before anything reads a payload.
+2. **In the map but not served** → `PROTOCOL_ERR_UNSUPPORTED` (`-7`). Also
+   opcode-only.
+3. **`LENGTH` does not match the row's width** → `PROTOCOL_ERR_BAD_LEN`
+   (`-3`), and **the handler never runs**.
+4. Only now does a handler see the request, and only now can a *value* be
+   rejected with `PROTOCOL_ERR_BAD_ARG` (`-4`).
+
+Steps 3 and 4 are separate so a tool knows which half of its request to fix.
+Merging them would leave it guessing.
+
+**Every input except a NULL argument gets an answer.** A host that receives
+silence cannot tell a refused command from a dead cable — the one exception is
+a request whose own CRC failed, which the parser drops before the dispatcher
+ever sees it.
+
+## Shape
+
+```c
+typedef fw_err_t (*command_reply_cb_t)(void *ctx, const uint8_t *data, size_t len);
+typedef bool (*command_busy_cb_t)(void *ctx);
+
+fw_err_t command_init(command_t *cmd, const command_cfg_t *cfg);
+fw_err_t command_deinit(command_t *cmd);
+fw_err_t command_on_frame(command_t *cmd, const protocol_req_t *req);
+```
+
+`command_cfg_t` carries `on_reply` (required), `reply_ctx`, `is_busy`
+(optional; NULL means never busy) and `busy_ctx`.
+
+`is_busy` is a **callback rather than an `updater_t *`** for a layering reason:
+the thing that knows whether a slot is already being written is the update cycle
+in `application/`, and `middleware/command` may not include a header from a
+layer above it (R-LAY-01). The same pattern `ota_http` uses to report progress
+upward without knowing who it notifies.
+
+`command_t` carries the response frame buffer — the second of the channel's two
+`PROTOCOL_MAX_FRAME` buffers — and the upgrade session. A response body is built
+straight into that frame rather than into a third buffer.
+
+## Dispatch
+
+One **flat switch** over the ten served opcodes, not the two-level
+range-then-item switch the source spec describes. At ten cases the extra level
+is ceremony: the compiler builds the same jump table either way, and a reader
+looking up `0x0202` finds it in one place. The `default:` label logs and answers
+`-7`, and is unreachable — the map already said the opcode is served, so
+reaching it means a row was added without a case.
+
+## The handlers
+
+| Opcode | What it does |
+|--------|--------------|
+| `0x0006` PING | Points the reply builder at the request's own bytes, so they are copied once, straight to the wire. Refuses a payload past `PROTOCOL_MAX_DATA - PROTOCOL_STATUS_LEN` with `-3` (see the gap below) |
+| `0x0001` RESTART_APP | Replies `PROTOCOL_OK` **first**, logs, waits `COMMAND_RESTART_GRACE_MS` (100 ms), then `esp_restart()`. Returns the never-transmitted `PROTOCOL_ERR_CRC` as an internal "already answered", so the caller does not send a second reply |
+| `0x0101` Set BOOT_SLOT | Rejects a slot that is neither 0 nor 1 with `-4`; otherwise `esp_ota_set_boot_partition()`. A failure is `-5`, not `-6`: a slot whose image does not validate is a state a host can fix by transferring one |
+| `0x0201` VERSION | `[0:16]` from `esp_app_get_description()`, `[16:32]` from `esp_ota_get_partition_description()` on the `app_firmware` slot. A slot with no image leaves **sixteen zero bytes and answers OK** — "unset" is an answer, not a failure, so no second command is needed to tell them apart |
+| `0x0202` Get BOOT_SLOT | Maps the running partition's subtype to the wire encoding. Neither OTA slot is `-6`, which no `partitions.csv` in this repo can produce |
+| `0x0203`/`0x0204` | `esp_read_mac()` for `ESP_MAC_WIFI_STA` / `ESP_MAC_BT`; a failure is `-6` |
+| `0x0601`/`0x0602`/`0x0603` | Routed to [usb-upgrade-session.md](usb-upgrade-session.md) |
+
+**Set and Get BOOT_SLOT are asymmetric on purpose.** Set writes `otadata` for
+the next boot; Get reports what is running now. A Set followed by a Get reads
+the old value until the unit restarts, so a tool must say "will boot X after
+restart" rather than read it back.
+
+`command_deinit()` aborts an open transfer rather than finalising it: a slot
+half written is a slot nothing should boot.
+
+## The RESTART_APP ordering, and how it is proven
+
+Replying before resetting is the whole contract — a host that never sees the OK
+cannot tell "restarting" from "the cable fell out". Flushed is not the same as
+read, so the 100 ms covers the host still having to be scheduled; a 16-byte
+frame is gone in well under a millisecond, so the wait is generous by two orders
+of magnitude and costs nothing before a reboot.
+
+On target `esp_restart()` never returns, so the only place this can be checked
+is the host suite: the fake counts resets instead of performing one, and the test
+asserts the reply was captured while that count was still zero.
+
+## The gap in the source spec
+
+It says PING echoes 0 to `PROTOCOL_MAX_DATA` bytes **and** that the reply
+carries `4 + REQ.LENGTH` — which at the cap asks for a reply of 32776 bytes,
+past that same cap. The real ceiling is
+`PROTOCOL_MAX_DATA - PROTOCOL_STATUS_LEN` = **32768**; 32769..32772 answer `-3`
+rather than a truncated echo. `UPG_WRITE` is unaffected, because its reply
+carries a status and nothing else — which is exactly why `PROTOCOL_MAX_DATA` is
+32772 rather than 32768.
+
+## See also
+
+- [../interface/command-map.md](../interface/command-map.md) — every opcode
+- [usb-upgrade-session.md](usb-upgrade-session.md) — the `0x06` range
+- [usb-host-flow.md](usb-host-flow.md) — the sequence a host runs
+
+### [behavior] USB Upgrade Session
+*`behavior/usb-upgrade-session.md` - The chunked image transfer over USB - what is checked before anything is erased, the chunk rules, and how a session ends. - status: active - source: middleware/command/src/command_upgrade.c, middleware/command/include/command.h, middleware/command/test/test_command.c - keywords: command_upgrade_begin, command_upgrade_write, command_upgrade_end, command_upgrade_t, chunk_max, img_crc32, esp_ota_begin, esp_ota_write, esp_ota_end, esp_ota_abort, no abort opcode*
+
+# USB Upgrade Session
+
+> `UPG_BEGIN` → N × `UPG_WRITE` → `UPG_END`. Nothing in that sequence can make
+> a slot bootable except the last step, which is what makes every earlier step
+> safe to abandon.
+
+## The session
+
+`command_upgrade_t`, carried inside `command_t`:
+
+| Field | Holds |
+|-------|-------|
+| `is_open` | a transfer is in progress |
+| `target` | the slot being written, `PROTOCOL_SLOT_*` |
+| `img_size` | total image bytes the host declared |
+| `img_crc32` | the CRC-32 the finished image must match |
+| `chunk_max` | the accepted chunk size, enforced on every write |
+| `written` | bytes written, **and the next offset expected** |
+| `crc` | running CRC-32 over what has been written |
+| `ota_handle` | the vendor handle, kept as a plain word so no SDK type reaches a public header (R-LAY-03) — the same trick `storage_t` uses |
+
+## UPG_BEGIN: everything checked before anything is erased
+
+In this order, and all of it before `esp_ota_begin()`:
+
+| Check | Failure |
+|-------|---------|
+| `target` is 0 or 1 | `-4` |
+| the slot exists in this build's partition table | `-4` |
+| `target` is **not** the running slot | `-5` |
+| the update cycle is not already writing (`is_busy`) | `-5` |
+| `img_size` is non-zero and fits the partition | `-4` |
+| `chunk_max` is a multiple of 1024 | `-4` |
+| `chunk_max` is within 4096..32768 | `-4` |
+
+Only then is the previous session discarded and the new one opened. A rejected
+`UPG_BEGIN` therefore **erases nothing and closes nothing** — the host loses a
+round trip and no more, and learns its request is wrong immediately instead of
+after minutes of writing.
+
+Refusing the running slot is the two-slot layout doing its job: overwriting the
+image underneath the running code is exactly what it exists to prevent.
+
+Zero is refused as a size because there is no such image, and it would make the
+first chunk also the last.
+
+## There is no abort opcode
+
+`UPG_BEGIN` **always starts over.** Sent while a transfer is open it discards
+that session and begins a new one; it never answers "busy with another
+transfer". A host that gave up half way, picked the wrong file or lost the cable
+simply sends it again, and one that crashed mid-transfer needs no recovery step.
+
+That is only safe because the old handle goes **first**, before the new one is
+opened. Otherwise a host retrying repeatedly strands one OTA handle per attempt
+— the leak the source spec names explicitly. Two host tests assert the open
+session count returns to one, and dropping the free turns exactly those two red.
+
+An abandoned session leaves a partly written slot, which is inert: nothing but
+`UPG_END` marks a slot valid, so the bootloader has no reason to look at it.
+
+## UPG_WRITE: strictly sequential
+
+`[offset:4][chunk]`, with `LENGTH` free-form so the handler checks its own
+widths:
+
+| Rule | Failure |
+|------|---------|
+| `LENGTH` at least 4, for the offset | `-3` |
+| a session is open | `-5` |
+| `offset` equals `written` | `-5` |
+| the chunk is not empty | `-3` |
+| the chunk is within `chunk_max` **and** within 32768 | `-3` |
+| the chunk does not run past `img_size` | `-3` |
+| the chunk is a multiple of 1024 **unless it is the last** | `-3` |
+
+The offset is on the wire so a host can prove it has not lost its place, **not
+so it can seek**: re-sending a chunk that already landed is as much out of
+order as skipping one.
+
+**The last chunk is exempt from the 1024 rule** and carries the remainder. An
+image size is not a multiple of 1024, and demanding one would mean padding every
+image and teaching `UPG_END` to ignore the padding. The device knows which chunk
+is last from `img_size`, so nothing says so on the wire.
+
+The CRC is folded as the bytes go by, so `UPG_END` needs no second pass over
+13 MB of flash.
+
+A failed `esp_ota_write()` is `-6` and **advances nothing**, so the host may
+retry the same chunk at the same offset.
+
+## UPG_END: verify, finalise, arm nothing
+
+| Condition | Result |
+|-----------|--------|
+| no session open | `-5` |
+| `written` short of `img_size` | `-5`, and **the session stays open** — the transfer is simply unfinished, so the host carries on rather than starting over |
+| the running CRC does not match `img_crc32` | `-6`, the session is discarded, and the slot is **not** finalised |
+| `esp_ota_end()` refused | `-6`; the vendor call frees the session either way, so it is not aborted twice |
+| otherwise | `PROTOCOL_OK` |
+
+A CRC mismatch is `-6` rather than `-4` because the device cannot tell a wrong
+`img_crc32` from a corrupted transfer, and corruption is overwhelmingly the
+likelier of the two. Either way the slot must not be finalised.
+
+**`UPG_END` deliberately does not arm and does not reboot.** The host follows
+with `Set BOOT_SLOT` and `RESTART_APP`. That separation is what keeps a
+half-written slot from ever being bootable — see
+[usb-host-flow.md](usb-host-flow.md).
+
+## The other writer
+
+The scheduled HTTP update cycle writes the same `app_firmware` slot. USB
+**yields** to it: `UPG_BEGIN` answers `-5` while `updater_state_get()` reports
+`CHECKING` or `DOWNLOADING`. `-5` is retryable, which is the honest answer — the
+download finishes and the next `UPG_BEGIN` is accepted.
+
+The application's busy callback reads an **unreadable** updater state as busy:
+refusing a transfer is recoverable, two writers on one slot is not.
+
+## See also
+
+- [usb-command-dispatch.md](usb-command-dispatch.md) — how a frame reaches here
+- [usb-host-flow.md](usb-host-flow.md) — the sequence and its time budget
+- [update-cycle-fsm.md](update-cycle-fsm.md) — the other writer
+- [../data/flash-and-partitions.md](../data/flash-and-partitions.md) — the two slots
 
 ### [rule] Where the R-XXX-nn Rules Come From
 *`rule/coding-standard-source.md` - How to resolve a rule ID cited in this repo's comments, and what outranks what. - status: active - source: conversation, E:/Baotd/docs/embedded-spec - keywords: R-RPO, R-LAY, R-ERR, R-LFC, R-CFG, R-BLD, R-VER, R-FMT, embedded-spec, emb-dtbao, spec_doc, spec-verify*
@@ -2220,11 +3153,11 @@ when `auto_push` is set, and never auto-pushes `protected_branches`
 rulesets (no deletion, no force-push; `main` also requires a pull request).
 
 ### [rule] Known Deviations and Open Holes
-*`rule/known-deviations.md` - Every place this repo departs from the house standard on purpose, plus the unfinished work that must not ship. - status: active - source: application/app/src/app.c:176-193, application/updater/src/updater.c:200-215, middleware/storage/src/storage.c:182-207, driver/bsp/src/bsp.c:22-33, CHANGELOG.md, conversation - keywords: SPEC-DEVIATION, TODO, R-VER-08, R-RPO-06, R-RPO-01, gap, self-test, migration*
+*`rule/known-deviations.md` - Every place this repo departs from the house standard on purpose, plus the unfinished work that must not ship. - status: active - source: application/app/src/app.c:176-193, application/updater/src/updater.c:200-215, middleware/storage/src/storage.c:182-207, driver/bsp/src/bsp.c:22-33, CHANGELOG.md, conversation - keywords: SPEC-DEVIATION, TODO, R-VER-08, R-RPO-06, R-RPO-01, gap, self-test, migration, usb, console UART0, PROTOCOL_ERR_UNSUPPORTED, PING ceiling*
 
 # Known Deviations and Open Holes
 
-> Six deliberate departures and six unfinished holes; the holes are the list that must be empty before a field release.
+> Nine deliberate departures and six unfinished holes; the holes are the list that must be empty before a field release.
 
 ## When this applies
 
@@ -2241,6 +3174,9 @@ this repo does not match the standard.
 | 4 | `R-RPO-09` tree | No `third_party/`; `test/` holds only the host harness, no on-target test | Nothing to put in `third_party/` yet. The on-target smoke test is missing, which is a hole rather than a departure — see below. |
 | 5 | naming | The project-wide status is `fw_err_t`, not the `updater_err_t` first proposed | `updater_err_t` would collide with the `updater` module's symbol prefix, and a grep for a prefix must land in exactly one place. `fw_err_t` is the standard's own name for the app-wide type. |
 | 6 | `R-VER-13` | Once anything is released, the changelog splits one-file-per-version under `docs/CHANGELOG/`; the root `CHANGELOG.md` keeps `[Unreleased]` plus an index. In use since v0.1.0 | User decision. The standard wants one newest-first file, so a reader or tool looking for "what changed in 0.1.0" no longer finds it in the conventional place. The index table is what keeps the trail followable. |
+| 7 | source USB spec | The console and boot log are on **UART0** (GPIO43/44), not on USB-Serial-JTAG as the source spec's product has them | Not a choice. ESP32-S3 has one internal USB PHY, time-division shared between USB-OTG and USB-Serial-JTAG (TRM 32.3.1, 33.3.1), and TinyUSB claims it during install. Keeping the log on USB-Serial-JTAG would silence it the moment the command channel came up. **Cost:** `tool-esp.py flash` loses its USB auto-download reset - flash over UART0, or hold BOOT. Never burn `EFUSE_USB_PHY_SEL` to "fix" this: it is one-way and removes USB-Serial-JTAG download in the bootloader too. |
+| 8 | source USB spec | 36 of the 46 defined opcodes answer `PROTOCOL_ERR_UNSUPPORTED` (`-7`) - the whole ATE range, all of Config, every Wi-Fi and network item, and `FACTORY_RESET` | The spec was written for product 0x0001, which has an LCD, touch panel, SD card, Ethernet, Wi-Fi and a config registry. This board has none of them. `-7` is the spec's own answer for "the opcode is right, this build cannot serve it", and it is the honest one: a stub returning OK would ship a unit carrying a check that never checked anything. See [../interface/command-map.md](../interface/command-map.md). |
+| 9 | source USB spec | `PING` refuses a payload above **32768** bytes with `-3`, not the `PROTOCOL_MAX_DATA` (32772) the spec implies | The spec contradicts itself: it says PING echoes up to `PROTOCOL_MAX_DATA` bytes **and** that the reply carries `4 + REQ.LENGTH`, which at the cap asks for a frame past that same cap. Refusing the length beats truncating the echo. `UPG_WRITE` is unaffected - its reply is a status only, which is exactly why the cap is 32772. |
 
 ## Open holes (must be empty before a field release)
 

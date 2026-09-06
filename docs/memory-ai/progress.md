@@ -1,6 +1,6 @@
 ---
 title: Progress
-updated: 2026-09-06
+updated: 2026-09-07
 ---
 
 # Progress
@@ -35,6 +35,27 @@ updated: 2026-09-06
 - **The firmware compiles.** `idf.py build` completes in `espressif/idf:v6.1`:
   1090 targets, `app_updater.bin` 0x31120 bytes (196 KB) against a 2 MB slot,
   90% free. Rebuilt clean on the 16 MB table at 240 MHz.
+- **A USB command channel, host-verified end to end.** Three new modules
+  (`middleware/protocol`, `middleware/command`, `driver/usb_cdc`) plus the wiring
+  in `application/app`. The host suite went from 26 tests to 56, all green: the
+  frame codec (resync past garbage, a `LENGTH` past the cap resuming one byte on,
+  a bad CRC dropped silently, pad bytes inside the CRC), the dispatch order
+  (`-2` before `-7` before `-3` before `-4`), every served handler, and the whole
+  upgrade session (the chunk band, sequential offsets, the 1024 rule and its
+  last-chunk exemption, a wrong image CRC refusing to finalise, and `UPG_BEGIN`
+  freeing the previous OTA handle).
+- **Three of those tests were proved to have teeth by mutation**, not assumed:
+  changing the parser's resync rule reddens exactly the resync test; reporting a
+  wrong `LENGTH` as `-4` reddens exactly the length test; dropping the
+  free-the-old-handle call in `UPG_BEGIN` reddens exactly the two open-session
+  assertions.
+- `docs/scripts/tool-usb.py` speaks the protocol from a PC. Its `selftest` runs
+  with no board and no pyserial, and pins the CRC to the same fixed vector the
+  firmware tests use.
+- **Measured, not estimated:** the channel costs ~65.6 KB of static RAM (two
+  32788-byte frame buffers); `.bss` is 70,592 bytes, 20.66 % of DRAM, leaving
+  roughly 270 KB for the heap. `app_updater.bin` is 0x3a7f0 with 89 % of its
+  2 MB slot free.
 - **v0.1.0 is released**, cut end to end by `tool-release.py`: seven phases, two
   merged pull requests, an annotated tag on `main`, and eight published
   artifacts. Both workflows green on the runs that produced it.
@@ -47,7 +68,9 @@ updated: 2026-09-06
    it exists, a broken image confirms itself and rollback never fires.
 3. `updater` `CHECKING` step: fetch the manifest, compare versions, decide.
 4. `updater` `DOWNLOADING` step: drive the fetch into the OTA write API, set the
-   boot partition.
+   boot partition. The USB path already does this work in
+   `middleware/command/src/command_upgrade.c`; the HTTP path should reuse the
+   same session rules rather than growing a second set.
 5. Network bring-up (Wi-Fi or Ethernet) — not in this repo at all.
 6. **Flash and boot v0.1.0 on real hardware.** Nothing has ever executed on a
    board, so everything about the flash layout is still arithmetic.
@@ -59,6 +82,16 @@ updated: 2026-09-06
    two-line change it takes.
 
 ## Known issues
+
+- ⚠ **The USB channel has never enumerated on a board.** Every byte of it is
+  proved on the host, and the descriptor, the PHY switch and the COM port are
+  the parts a host test cannot reach. First thing to check on the bench:
+  `USB\VID_A331&PID_F001` in Device Manager, then
+  `python docs/scripts/tool-usb.py ping`.
+- ⚠ **Flashing changed.** The console moved to UART0 because the USB command
+  channel claims the single internal PHY, so there is no USB auto-download reset
+  any more: flash over a UART0 bridge, or hold BOOT. Anyone following the older
+  instructions will conclude the board is dead when it is not.
 
 - ⚠ The firmware has been **built** but never **flashed**. The partition table
   is accepted by the build and the image fits with 90% of its slot free; whether

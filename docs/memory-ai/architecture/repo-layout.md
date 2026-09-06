@@ -4,10 +4,10 @@ category: architecture
 order: 1
 purpose: The three-layer source tree, the shape of one module, and where build entries, scripts and hooks live.
 status: active
-updated: 2026-09-06
+updated: 2026-09-07
 source: application/, middleware/, driver/, workspace/0xF001/, test/host/, .github/workflows/, docs/, README.md
 confidence: confirmed
-keywords: application, middleware, driver, bsp, workspace, 0xF001, include, src, module directory
+keywords: application, middleware, driver, bsp, usb_cdc, protocol, command, workspace, 0xF001, include, src, module directory
 ---
 
 # Repository Layout
@@ -31,16 +31,24 @@ before anyone opens a header.
 | `application/updater/` | The update cycle: when to check, when to retry, when to give up. |
 | `middleware/fw/` | The project-wide status code every app and middleware call returns. |
 | `middleware/ota_http/` | Fetches an image over HTTPS and hands it out chunk by chunk. |
+| `middleware/protocol/` | The USB wire format: frame codec, status codes, opcode map. |
+| `middleware/command/` | Dispatches a decoded USB frame to the handler that serves it. |
 | `middleware/storage/` | The persisted settings/boot record in NVS. |
 | `driver/bsp/` | Pin map, clock, flash geometry. The only place a pin number appears. |
+| `driver/usb_cdc/` | The CDC-ACM byte pipe on USB-OTG. Owns the TinyUSB stack. |
 | `workspace/0xF001/` | Build entry for product 0xF001: CMakeLists, sdkconfig.defaults, partitions.csv. |
-| `test/host/` | Unity runner, the host fake for `esp_log.h`, and the CMake that builds them. |
+| `test/host/` | Unity runner, the host fakes for the SDK headers our logic includes, and the CMake that builds them. |
 | `.github/workflows/` | CI on every push, release on every `v*` tag. |
 | `docs/scripts/` | Developer commands (Python 3). |
 | `docs/.githooks/` | Git hooks (Python 3). |
 | `docs/memory-ai/` | This memory bank. |
 
-There is no `third_party/` yet: nothing needed to go in it. `test/` exists but
+There is no `third_party/` yet, but there is now one **managed dependency**:
+`driver/usb_cdc/idf_component.yml` pulls `espressif/esp_tinyusb`, because
+ESP-IDF v6.1 ships no USB device stack at all. It lands in
+`workspace/0xF001/managed_components/`, which is gitignored along with
+`dependencies.lock`, so a fresh clone resolves it on its first build.
+ `test/` exists but
 holds only the **host harness** — the tests themselves stay beside their modules
 (R-RPO-07), and no on-target test exists yet.
 
@@ -52,14 +60,18 @@ Every directory under the three layer directories has the same inside:
 |------|------|
 | `include/<mod>.h` | The single public header. The only file an outsider includes. |
 | `src/<mod>.c` | Implementation. |
-| `src/<mod>_priv.h` | Internal declarations. Present only where something is actually shared; currently only `application/app/`. |
-| `test/test_<mod>.c` | Host tests, present for `fw` and `updater`. Each function must also be listed in `test/host/runner.c` or it never runs. |
+| `src/<mod>_priv.h` | Internal declarations. Present only where something is actually shared: `application/app/` and `middleware/command/`. |
+| `test/test_<mod>.c` | Host tests, present for `fw`, `updater`, `protocol` and `command`. Each function must also be listed in `test/host/runner.c` or it never runs. |
 | `CMakeLists.txt` | ESP-IDF component registration. |
 
 The directory name, the public header name, and the symbol prefix are the same
 word, so one grep for the prefix finds the folder, the file and every symbol in
-it. Verified: each of `app`, `updater`, `fw`, `ota_http`, `storage`, `bsp` is
-declared in exactly one module directory.
+it. Verified: each of `app`, `updater`, `fw`, `ota_http`, `protocol`, `command`,
+`storage`, `bsp`, `usb_cdc` is declared in exactly one module directory.
+
+`middleware/command/` is the one module with two sources - `command.c` for the
+dispatch and the stateless handlers, `command_upgrade.c` for the image transfer
+session - which is what `command_priv.h` exists to bridge.
 
 ## Dependencies & build
 

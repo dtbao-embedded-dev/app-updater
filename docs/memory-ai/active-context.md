@@ -1,6 +1,6 @@
 ---
 title: Active Context
-updated: 2026-09-06
+updated: 2026-09-07
 ---
 
 # Active Context
@@ -9,15 +9,38 @@ updated: 2026-09-06
 
 ## Current focus
 
-`v0.1.0` is out. Every automated path — build, test, sanitizers, analysis,
-secret scan, release — has now been exercised for real.
+The **USB command channel** is written and green: 56 host tests, a clean
+firmware build, and three mutation checks proving the tests bite. A PC can now
+read a unit and push an image into `app_firmware` without a network.
 
-**One thing has never happened: this code has never run on hardware.** That is
-the whole of what is left to find out, and it makes the BSP board table the
-next thing to touch, because its GPIO numbers are placeholders that may be
-wired to something else entirely.
+**And it has still never run on hardware.** That is unchanged and now matters
+more, because the channel added two things a host test cannot reach: the USB
+descriptor a PC has to accept, and the PHY switch that takes USB-Serial-JTAG
+away. The next session is a bench session, in this order:
+
+1. Fill the BSP board table from the real 0xF001 schematic — still placeholders,
+   still able to drive a pin into something that does not like it.
+2. Flash over **UART0** (the console moved there; USB auto-download is gone).
+3. Cable in, and look for `USB\VID_A331&PID_F001`. If it does not appear, the
+   descriptor or the PHY switch is where to look, not the protocol.
+4. `tool-usb.py ping`, then `version`, then a real `upgrade` of an
+   `app_firmware` image, then `boot-slot 1` and `restart`, then `version` again
+   to confirm the new image is what booted. That last step is the only one that
+   proves the upgrade worked.
 
 ## Recent changes
+
+- 2026-09-07 — **The USB command channel.** CDC-ACM on USB-OTG at
+  `0xA331:0xF001`, speaking the binary protocol from
+  `data-monitor/data-mirror-firmware/docs/spec/usb`. `middleware/protocol` holds
+  the frame codec and a 46-row opcode map; `middleware/command` dispatches to
+  ten served handlers and answers `-7` for the 36 aimed at hardware this board
+  does not have; `driver/usb_cdc` owns TinyUSB, the repo's first managed
+  dependency, since ESP-IDF v6.1 ships no USB device stack. The console moved to
+  UART0 because the S3 has one internal USB PHY and TinyUSB claims it. Also
+  `docs/scripts/tool-usb.py` and `fullclean` in `tool-esp.py`. Two findings
+  recorded as deviations: the spec's `PING` ceiling contradicts its own cap, and
+  the 36 unsupported opcodes are a deliberate `-7` rather than stubs.
 
 - 2026-09-06 — **Boot banner, and the BSP now asks the chip.** `app_run()`
   opens with `print_banner()` — printf, not ESP_LOGI — carrying the git
@@ -113,6 +136,14 @@ wired to something else entirely.
    it shipped in v0.1.0 and is named in that release's notes.
 
 ## Active decisions
+
+- The USB dispatcher asks the application whether a slot write is in progress
+  through a callback; it must not include `updater.h`, because `middleware/`
+  may not include from `application/`. The plan for this work originally had it
+  holding an `updater_t *`, which would have broken that.
+- `PROTOCOL_MAX_DATA` stays at the spec's 32772 so a host built against the spec
+  needs no change; the cost is two 32788-byte buffers, and the third the spec
+  budgets was removed by building a reply body straight into the reply frame.
 
 - Commit messages carry no AI co-author or generation trailer. See
   [rule/commit-messages.md](rule/commit-messages.md).

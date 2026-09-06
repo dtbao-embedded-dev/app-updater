@@ -1,6 +1,5 @@
 /**
  * @file    fw.h
- * @author  dtbao
  * @date    2026-09-06
  * @brief   Project-wide status code returned by every application and
  *          middleware function (R-ERR-08).
@@ -16,12 +15,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/* -------------------------- Constants & macros ------------------------- */
-
-#define FW_VERSION_MAJOR 0
-#define FW_VERSION_MINOR 1
-#define FW_VERSION_PATCH 0
 
 /* -------------------------------- Types -------------------------------- */
 

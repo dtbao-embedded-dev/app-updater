@@ -1,6 +1,5 @@
 /**
  * @file    esp_log.h
- * @author  dtbao
  * @date    2026-09-06
  * @brief   Host fake for the ESP-IDF logging header (R-TST-07).
  *

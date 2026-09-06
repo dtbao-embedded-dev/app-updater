@@ -1,6 +1,5 @@
 /**
  * @file    storage.c
- * @author  dtbao
  * @date    2026-09-06
  * @brief   Persists the updater's settings and boot record in NVS, versioned
  *          and CRC-protected.

@@ -7,7 +7,7 @@ status: active
 updated: 2026-09-06
 source: middleware/fw/include/fw.h, middleware/fw/src/fw.c:25-56
 confidence: confirmed
-keywords: fw.h, fw_err_t, fw_err_str, FW_OK, FW_VERSION_MAJOR
+keywords: fw.h, fw_err_t, fw_err_str, FW_OK, FW_ERR_IO, fw_err_t codes
 ---
 
 # Project Status API (fw)
@@ -20,7 +20,6 @@ keywords: fw.h, fw_err_t, fw_err_str, FW_OK, FW_VERSION_MAJOR
 |------|------------------|------|------------------|
 | `fw_err_str` | `const char *fw_err_str(fw_err_t err)` | Maps a status to its constant name | A string literal with static lifetime. Never NULL, never freed by the caller. An unrecognised value yields `"FW_ERR_UNKNOWN"`. |
 
-The header also exports `FW_VERSION_MAJOR` / `_MINOR` / `_PATCH`.
 
 ## Parameters & config
 

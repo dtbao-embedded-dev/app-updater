@@ -1,6 +1,5 @@
 /**
  * @file    bsp.c
- * @author  dtbao
  * @date    2026-09-06
  * @brief   Board pin map, clock and flash geometry for product 0xF001.
  *

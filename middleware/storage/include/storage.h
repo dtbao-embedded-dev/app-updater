@@ -1,6 +1,5 @@
 /**
  * @file    storage.h
- * @author  dtbao
  * @date    2026-09-06
  * @brief   Persists the updater's settings and boot record in NVS, versioned
  *          and CRC-protected.
@@ -24,10 +23,6 @@ extern "C" {
 #endif
 
 /* -------------------------- Constants & macros ------------------------- */
-
-#define STORAGE_VERSION_MAJOR 0
-#define STORAGE_VERSION_MINOR 1
-#define STORAGE_VERSION_PATCH 0
 
 /** Record layout version. Bump it and add a migration step on any field change. */
 #define STORAGE_RECORD_VERSION 1U

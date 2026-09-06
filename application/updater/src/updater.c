@@ -1,6 +1,5 @@
 /**
  * @file    updater.c
- * @author  dtbao
  * @date    2026-09-06
  * @brief   Decides when to check for a new image, drives the download, and
  *          confirms or rolls back the result.

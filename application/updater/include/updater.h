@@ -1,6 +1,5 @@
 /**
  * @file    updater.h
- * @author  dtbao
  * @date    2026-09-06
  * @brief   Decides when to check for a new image, drives the download, and
  *          confirms or rolls back the result.
@@ -23,10 +22,6 @@ extern "C" {
 #endif
 
 /* -------------------------- Constants & macros ------------------------- */
-
-#define UPDATER_VERSION_MAJOR 0
-#define UPDATER_VERSION_MINOR 1
-#define UPDATER_VERSION_PATCH 0
 
 /** Consecutive download failures before the updater stops trying until reboot. */
 #define UPDATER_FAIL_LIMIT 3U

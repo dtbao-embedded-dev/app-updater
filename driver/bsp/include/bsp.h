@@ -1,6 +1,5 @@
 /**
  * @file    bsp.h
- * @author  dtbao
  * @date    2026-09-06
  * @brief   Board pin map, clock and flash geometry for product 0xF001.
  *
@@ -20,10 +19,6 @@ extern "C" {
 #endif
 
 /* -------------------------- Constants & macros ------------------------- */
-
-#define BSP_VERSION_MAJOR 0
-#define BSP_VERSION_MINOR 1
-#define BSP_VERSION_PATCH 0
 
 /** A pin field set to this means the board does not wire that function. */
 #define BSP_GPIO_NONE (-1)

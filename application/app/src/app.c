@@ -1,6 +1,5 @@
 /**
  * @file    app.c
- * @author  dtbao
  * @date    2026-09-06
  * @brief   Brings every module up in order and runs the update cycle.
  *

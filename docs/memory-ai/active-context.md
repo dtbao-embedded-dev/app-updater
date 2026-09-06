@@ -9,12 +9,18 @@ updated: 2026-09-06
 
 ## Current focus
 
-Nothing is under active edit. The next meaningful move is **getting one real CI
-run to go green**: the firmware has never been compiled by ESP-IDF and neither
-workflow has ever executed, so the whole target-side story is written rather
-than observed. Everything that could be verified on a PC has been.
+CI runs and the firmware compiles. What is left untested is everything that
+needs the two things a CI runner does not have: **a board** and **a tag**.
+Nothing boots yet, and `release.yml` has never executed.
 
 ## Recent changes
+
+- 2026-09-06 — First real CI run (34031391115): 4/6 green. Two genuine failures
+  found and fixed — `-Wundef` cannot coexist with ESP-IDF's log headers, and
+  `pip` is not on PATH in the IDF container until `export.sh` is sourced. Both
+  fixes reproduced and verified in the same image locally before re-pushing.
+- 2026-09-06 — Firmware built for the first time: 1090 targets,
+  `app_updater.bin` 198 KB, 90% of its slot free.
 
 - 2026-09-06 — CI grown to the six jobs R-SAN asks for: format, cppcheck +
   clang-tidy, host tests, ASan/UBSan, firmware build, gitleaks. Tool versions
@@ -48,15 +54,15 @@ than observed. Everything that could be verified on a PC has been.
 
 ## Next steps
 
-1. Export ESP-IDF 6.x and run `python docs/scripts/tool-esp.py build`. Expect
-   the first failures in component names and `-Wconversion`.
-2. On success, flip
-   [architecture/build-and-toolchain.md](architecture/build-and-toolchain.md)
-   and [data/flash-and-partitions.md](data/flash-and-partitions.md) from
-   `inferred` to `confirmed`.
+1. Flash a real 0xF001 board. That is the only thing that can confirm
+   [data/flash-and-partitions.md](data/flash-and-partitions.md), which is still
+   arithmetic rather than observation.
+2. Fill the BSP board table from the real schematic first — the current GPIO is
+   a placeholder and may be wired to something else.
 3. Run `spec-verify` and resolve or record what it finds.
-4. Fill the BSP board table from the real schematic.
-5. Then start on the self-test in `confirm_or_roll_back()`.
+4. Then the self-test in `confirm_or_roll_back()`, the hole that matters most.
+5. `release.yml` stays unproven until a tag is pushed; consider a throwaway
+   pre-release tag on a branch to exercise it before it matters.
 
 ## Active decisions
 

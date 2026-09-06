@@ -6,7 +6,7 @@ purpose: What GitHub Actions runs on a push and on a tag, in which container, an
 status: inferred
 updated: 2026-09-06
 source: .github/workflows/ci.yml, .github/workflows/release.yml
-confidence: inferred
+confidence: confirmed
 keywords: GitHub Actions, ci.yml, release.yml, espressif/idf:v6.1, ctest, clang-format, clang-tidy, cppcheck, gitleaks, ASan, UBSan, gh release create, SHA256SUMS
 ---
 
@@ -14,10 +14,20 @@ keywords: GitHub Actions, ci.yml, release.yml, espressif/idf:v6.1, ctest, clang-
 
 > Three checks on every push, and a tag that cannot publish unless it agrees with `VERSION` and has a changelog entry waiting for it.
 
-🟡 **inferred:** neither workflow has ever executed. They are written against
-the documented behaviour of the actions and of the `espressif/idf:v6.1` image
-(confirmed to exist on Docker Hub), but the Docker daemon was unavailable when
-they were authored. The first green run is the confirmation.
+🟢 **`ci.yml` has run.** First run (34031391115) went 4/6: `clang-format`, both
+host-test jobs and the secret scan passed on the first try; `firmware` and
+`analyse` failed, and both failures were real rather than cosmetic — see below.
+`release.yml` has **still never executed**, because no tag has been pushed.
+
+Two things the first run taught, both now fixed:
+
+| Failure | Cause | Fix |
+|---------|-------|-----|
+| `firmware` | `-Wundef` fires inside ESP-IDF's own log headers when they are included from our files; a per-target flag cannot prevent it | Dropped `-Wundef` from the target warning set, kept it on the host build |
+| `analyse` | `pip: not found` — the IDF image keeps python in a virtualenv that is only on `PATH` after `export.sh`, and the default container shell is `sh` | `shell: bash` plus `. $IDF_PATH/export.sh` before `python -m pip` |
+
+Both fixes were then verified by running the same commands in the same image
+locally before pushing again.
 
 ## CI — `.github/workflows/ci.yml`
 

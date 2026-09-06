@@ -34,6 +34,23 @@ void test_protocol_rsp_build_writes_status_first(void);
 void test_protocol_rsp_build_refuses_a_buffer_too_small(void);
 void test_protocol_status_str_names_every_defined_status(void);
 
+void test_command_serves_exactly_the_documented_opcode_set(void);
+void test_command_answers_unsupported_for_hardware_this_board_lacks(void);
+void test_command_answers_bad_cmd_for_an_opcode_the_spec_never_defined(void);
+void test_command_answers_bad_cmd_for_the_retired_product_id_item(void);
+void test_command_checks_length_before_it_checks_value(void);
+void test_command_ping_echoes_the_payload_byte_for_byte(void);
+void test_command_ping_refuses_a_payload_whose_reply_would_not_fit(void);
+void test_command_restart_app_replies_before_it_resets(void);
+void test_command_version_reports_the_updater_then_the_firmware(void);
+void test_command_version_zeroes_a_slot_that_holds_no_image(void);
+void test_command_get_boot_slot_reports_the_running_slot(void);
+void test_command_set_boot_slot_arms_the_slot_it_names(void);
+void test_command_set_boot_slot_refuses_a_slot_with_no_valid_image(void);
+void test_command_reads_both_burned_in_macs(void);
+void test_command_maps_a_mac_read_failure_to_hw(void);
+void test_command_rejects_null_arguments(void);
+
 void test_updater_step_before_start_returns_err_state(void);
 void test_updater_init_twice_returns_err_state(void);
 void test_updater_rejects_null_arguments(void);
@@ -78,6 +95,23 @@ int main(void)
     RUN_TEST(test_protocol_rsp_build_writes_status_first);
     RUN_TEST(test_protocol_rsp_build_refuses_a_buffer_too_small);
     RUN_TEST(test_protocol_status_str_names_every_defined_status);
+
+    RUN_TEST(test_command_serves_exactly_the_documented_opcode_set);
+    RUN_TEST(test_command_answers_unsupported_for_hardware_this_board_lacks);
+    RUN_TEST(test_command_answers_bad_cmd_for_an_opcode_the_spec_never_defined);
+    RUN_TEST(test_command_answers_bad_cmd_for_the_retired_product_id_item);
+    RUN_TEST(test_command_checks_length_before_it_checks_value);
+    RUN_TEST(test_command_ping_echoes_the_payload_byte_for_byte);
+    RUN_TEST(test_command_ping_refuses_a_payload_whose_reply_would_not_fit);
+    RUN_TEST(test_command_restart_app_replies_before_it_resets);
+    RUN_TEST(test_command_version_reports_the_updater_then_the_firmware);
+    RUN_TEST(test_command_version_zeroes_a_slot_that_holds_no_image);
+    RUN_TEST(test_command_get_boot_slot_reports_the_running_slot);
+    RUN_TEST(test_command_set_boot_slot_arms_the_slot_it_names);
+    RUN_TEST(test_command_set_boot_slot_refuses_a_slot_with_no_valid_image);
+    RUN_TEST(test_command_reads_both_burned_in_macs);
+    RUN_TEST(test_command_maps_a_mac_read_failure_to_hw);
+    RUN_TEST(test_command_rejects_null_arguments);
 
     RUN_TEST(test_updater_step_before_start_returns_err_state);
     RUN_TEST(test_updater_init_twice_returns_err_state);

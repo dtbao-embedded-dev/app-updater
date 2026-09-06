@@ -1,0 +1,17 @@
+# Product 0xF001 - ESP32-S3, 4 MB flash.
+#
+# Two OTA slots and NO factory partition: the bootloader never rolls back to a
+# factory image, so a rollback-capable product has ota_0 + ota_1 only.
+# App partitions must start on a 64 KB boundary. The table itself sits at
+# 0x8000 and is 0xC00 long, so nothing may start before 0x9000.
+#
+# Changing a size here means changing CONFIG_ESPTOOLPY_FLASHSIZE_* in
+# sdkconfig.defaults in the same commit, and an OTA image built against the old
+# table will not fit the new one (R-VER-03).
+#
+# Name,     Type, SubType, Offset,   Size,     Flags
+nvs,        data, nvs,     0x9000,   0x6000,
+otadata,    data, ota,     0xF000,   0x2000,
+phy_init,   data, phy,     0x11000,  0x1000,
+ota_0,      app,  ota_0,   0x20000,  0x1E0000,
+ota_1,      app,  ota_1,   0x200000, 0x1E0000,

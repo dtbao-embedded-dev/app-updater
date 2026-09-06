@@ -5,7 +5,7 @@ order: 4
 purpose: What GitHub Actions runs on a push and on a tag, in which container, and which gates can stop a release.
 status: inferred
 updated: 2026-09-06
-source: .github/workflows/ci.yml, .github/workflows/release.yml
+source: .github/workflows/ci.yml, .github/workflows/release.yml, docs/scripts/tool-release.py
 confidence: confirmed
 keywords: GitHub Actions, ci.yml, release.yml, espressif/idf:v6.1, ctest, clang-format, clang-tidy, cppcheck, gitleaks, ASan, UBSan, gh release create, SHA256SUMS
 ---
@@ -17,7 +17,7 @@ keywords: GitHub Actions, ci.yml, release.yml, espressif/idf:v6.1, ctest, clang-
 🟢 **`ci.yml` has run.** First run (34031391115) went 4/6: `clang-format`, both
 host-test jobs and the secret scan passed on the first try; `firmware` and
 `analyse` failed, and both failures were real rather than cosmetic — see below.
-`release.yml` has **still never executed**, because no tag has been pushed.
+`release.yml` has now run too, once, and went green on its first attempt (34032701944) — both jobs, eight artifacts attached.
 
 Two things the first run taught, both now fixed:
 
@@ -28,6 +28,13 @@ Two things the first run taught, both now fixed:
 
 Both fixes were then verified by running the same commands in the same image
 locally before pushing again.
+
+**What the first `release.yml` run proved.** Both gates fired and let the tag
+through rather than being untested: the tag matched `VERSION`, and
+`docs/CHANGELOG/v0.1.0.md` existed because the release script had written it
+minutes earlier. The published assets are `app_updater.bin` (197,504 bytes),
+its `.elf` and `.map`, the bootloader, the partition table, `flash_args`, the
+size report, and a `SHA256SUMS` over all of them.
 
 ## CI — `.github/workflows/ci.yml`
 

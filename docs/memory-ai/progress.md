@@ -34,19 +34,25 @@ updated: 2026-09-06
   and fixed, not suppressed.
 - **The firmware compiles.** `idf.py build` completes in `espressif/idf:v6.1`:
   1090 targets, `app_updater.bin` 198 KB against a 1.875 MB slot, 90% free.
+- **v0.1.0 is released**, cut end to end by `tool-release.py`: seven phases, two
+  merged pull requests, an annotated tag on `main`, and eight published
+  artifacts. Both workflows green on the runs that produced it.
 
 ## What's left
 
-1. **A self-test in `confirm_or_roll_back()`** — the highest-value hole. Until
+1. **Fill the BSP board table from the 0xF001 schematic.** Its GPIO numbers are
+   placeholders; driving the wrong pin is how a first bring-up damages a board.
+2. **A self-test in `confirm_or_roll_back()`** — the highest-value hole. Until
    it exists, a broken image confirms itself and rollback never fires.
-2. `updater` `CHECKING` step: fetch the manifest, compare versions, decide.
-3. `updater` `DOWNLOADING` step: drive the fetch into the OTA write API, set the
+3. `updater` `CHECKING` step: fetch the manifest, compare versions, decide.
+4. `updater` `DOWNLOADING` step: drive the fetch into the OTA write API, set the
    boot partition.
-4. Network bring-up (Wi-Fi or Ethernet) — not in this repo at all.
-5. Real board values in the BSP table, from the 0xF001 schematic.
-6. An **on-target** smoke test. The host suite runs; nothing exercises a board.
-7. Record migration in `storage`, before any field release.
-8. Enable `gcc -fanalyzer` — deferred on purpose, not forgotten. The trigger is
+5. Network bring-up (Wi-Fi or Ethernet) — not in this repo at all.
+6. **Flash and boot v0.1.0 on real hardware.** Nothing has ever executed on a
+   board, so everything about the flash layout is still arithmetic.
+7. An **on-target** smoke test. The host suite runs; nothing exercises a board.
+8. Record migration in `storage`, before any field release.
+9. Enable `gcc -fanalyzer` — deferred on purpose, not forgotten. The trigger is
    the first code that does buffer arithmetic, parsing, or allocation; see
    [rule/static-analysis.md](rule/static-analysis.md) for the exact list and the
    two-line change it takes.
@@ -62,9 +68,9 @@ updated: 2026-09-06
 - ⚠ A test function that is not listed in `test/host/runner.c` compiles, links
   and never runs, with nothing going red to say so. The two lists must be kept
   in step by hand.
-- 🔴 **`release.yml` has never executed.** No tag has been pushed, so the
-  version gate, the artifact collection and `gh release create` are written
-  against documented behaviour, not observed behaviour. `ci.yml` has run.
+- ⚠ Everything now runs except the thing that matters most: **no code has ever
+  executed on a board.** The image builds, is published, and is byte-addressable
+  — and has never booted.
 - ⚠ The first build may fail on `-Wconversion`/`-Werror` in SDK macros expanded
   inside our translation units. That is the rule working; fix at the call site,
   never by silencing the warning.

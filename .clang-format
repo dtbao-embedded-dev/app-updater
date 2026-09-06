@@ -1,0 +1,31 @@
+# R-FMT-01: this file is the formatting rule. Do not hand-format, do not argue
+# layout in review. Requires clang-format >= 15 (InsertBraces).
+---
+Language: Cpp
+BasedOnStyle: LLVM
+
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 100
+
+# R-FMT-02: brace every branch, even a one-line body.
+BreakBeforeBraces: Attach
+InsertBraces: true
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+AllowShortCaseLabelsOnASingleLine: false
+
+# Pointer binds to the name: uint8_t *data
+PointerAlignment: Right
+DerivePointerAlignment: false
+
+IndentCaseLabels: true
+AlignConsecutiveAssignments: true
+AlignConsecutiveMacros: true
+AlignTrailingComments: true
+
+# Include order is Own / project / SDK / C standard, separated by blank lines
+# and kept by hand (R-SRC-01 puts the module's own header first).
+SortIncludes: false

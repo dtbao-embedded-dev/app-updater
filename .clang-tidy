@@ -1,0 +1,66 @@
+# R-SAN: the compiler first, then clang-tidy. This file is the rule, the way
+# .clang-format is - so a developer and CI cannot disagree about what counts.
+#
+# R-SAN-02: every disabled check carries its reason here. A check turned off
+# without one is a check nobody decided about.
+---
+Checks: >
+  -*,
+  bugprone-*,
+  cert-*,
+  clang-analyzer-*,
+  misc-*,
+  performance-*,
+  readability-*,
+  -bugprone-easily-swappable-parameters,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+  -misc-include-cleaner,
+  -readability-identifier-length,
+  -readability-magic-numbers,
+  -readability-function-cognitive-complexity,
+  -readability-avoid-nested-conditional-operator,
+  -readability-implicit-bool-conversion
+
+# Why each is off:
+#
+#   bugprone-easily-swappable-parameters
+#       Fires on (dev, cfg) and on the (tag, fmt) of the vendor log macro -
+#       argument orders this project does not get to choose (R-LFC-01).
+#
+#   clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+#       Wants memset_s. That is C11 Annex K, which is optional and which the
+#       newlib shipped with ESP-IDF does not provide. Unactionable on target.
+#
+#   misc-include-cleaner
+#       Judges transitive includes against a host libc; on a firmware target it
+#       argues with every SDK header.
+#
+#   readability-identifier-length
+#       R-NAM-06 explicitly allows the short names everyone here already uses:
+#       cfg, buf, len, idx, err, ctx, rx, tx.
+#
+#   readability-magic-numbers
+#       Register maps, board tables and partition offsets are literals by
+#       nature; the rule that matters is R-DOX-06, cite the datasheet.
+#
+#   readability-function-cognitive-complexity
+#       R-SRC-07 already caps a function at about 60 lines, enforced at review.
+#
+#   readability-avoid-nested-conditional-operator
+#       One nested ternary in an error map is clearer than five if statements.
+#
+#   readability-implicit-bool-conversion
+#       Fires on `= {0}`, which is THE portable way to zero a struct in C, on
+#       any struct whose first member happens to be a bool. The check offers no
+#       way to allow it. The part worth keeping - an int used as a condition -
+#       this codebase avoids by convention: every test is an explicit
+#       comparison (`!= NULL`, `!= FW_OK`).
+
+# A finding in our code is a build failure (R-SAN-01: fix it, do not suppress
+# it). A one-line NOLINTNEXTLINE with a reason is the escape hatch (R-SAN-02).
+WarningsAsErrors: "*"
+
+# R-SAN-03: never analyse the vendor SDK. Findings we cannot fix train everyone
+# to ignore the report.
+HeaderFilterRegex: "(application|middleware|driver)/"
+FormatStyle: file

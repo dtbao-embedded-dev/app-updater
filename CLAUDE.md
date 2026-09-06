@@ -1,4 +1,4 @@
-# app-updater
+# App Updater
 
 ESP32-S3 firmware (ESP-IDF 6.x, C11) that keeps a product up to date in the
 field: it checks a manifest on a schedule, writes a new image into the spare OTA

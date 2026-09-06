@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Developer commands for app-updater (R-RPO-06).
+"""Developer commands for App Updater (R-RPO-06).
 
 One entry point rather than six scripts: every ESP-IDF command is idf.py with
 the workspace, the environment and the serial port already filled in, which is

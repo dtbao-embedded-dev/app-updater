@@ -1,4 +1,4 @@
-# app-updater
+# App Updater
 
 [![CI](https://github.com/dtbao-embedded-dev/app-updater/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/dtbao-embedded-dev/app-updater/actions/workflows/ci.yml)
 [![version](https://img.shields.io/badge/version-0.1.0-blue)](CHANGELOG.md)

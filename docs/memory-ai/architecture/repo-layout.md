@@ -16,7 +16,7 @@ keywords: application, middleware, driver, bsp, workspace, 0xF001, include, src,
 
 ## Responsibility
 
-`app-updater` is firmware for an ESP32-S3 product whose job is to keep itself up
+App Updater is firmware for an ESP32-S3 product whose job is to keep itself up
 to date in the field: check a manifest on a schedule, write a new image into the
 spare OTA slot, then confirm or roll back on the next boot.
 

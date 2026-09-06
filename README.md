@@ -12,9 +12,7 @@ schedule, writes the new product image into the `app_firmware` slot, and lets
 the bootloader confirm it or roll back on the next boot.
 
 - **Target**: ESP32-S3, ESP-IDF **v6.1**, C11 (`-std=gnu11`)
-- **Version**: 0.1.0 — see [CHANGELOG.md](CHANGELOG.md). **Not released**; no
-  tag exists yet, and [the open holes](docs/memory-ai/rule/known-deviations.md)
-  are why.
+- **Version**: 0.1.0 — see [CHANGELOG.md](CHANGELOG.md)
 
 > **This repo is one of a pair.** `app_updater` (this one) is the small recovery
 > app; `app_firmware` (sibling repo) is the product. They occupy the two app

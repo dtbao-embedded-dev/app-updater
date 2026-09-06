@@ -6,8 +6,11 @@ idf_component_register(SRCS "src/app.c"
                        INCLUDE_DIRS "include"
                        REQUIRES fw
                        PRIV_REQUIRES bsp
+                                     command
+                                     protocol
                                      storage
                                      updater
+                                     usb_cdc
                                      app_update
                                      esp_app_format
                                      esp_partition

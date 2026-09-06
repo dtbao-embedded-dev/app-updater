@@ -12,8 +12,11 @@
 
 #include "app_priv.h"
 #include "bsp.h"
+#include "command.h"
+#include "protocol.h"
 #include "storage.h"
 #include "updater.h"
+#include "usb_cdc.h"
 
 #include "esp_app_desc.h"
 #include "esp_chip_info.h"
@@ -23,6 +26,7 @@
 #include "esp_partition.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/stream_buffer.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
 
@@ -41,6 +45,20 @@
 #define APP_GIT_COMMIT "unknown"
 #endif
 
+/* Bytes buffered between the USB service task and the dispatch task. The CDC
+ * RX FIFO is 512 and the protocol is synchronous - a host sends one command and
+ * waits - so this only has to absorb one frame arriving faster than the parser
+ * walks it, which it does trivially. Sized generously anyway because 4 KB next
+ * to the channel's 64 KB of frame buffers is not worth economising on. */
+#define APP_USB_RX_BYTES 4096U
+
+/* The dispatch task. It parses frames and runs handlers, the deepest of which
+ * writes flash through esp_ota_write(); the frame buffers it works on live in
+ * the context below rather than on this stack. Priority matches the TinyUSB
+ * service task, so neither starves the other. */
+#define APP_USB_TASK_STACK 4096U
+#define APP_USB_TASK_PRIO  5U
+
 /* ---------------------------- Private types ---------------------------- */
 
 /** Everything the application owns, in one struct passed down at init
@@ -50,6 +68,10 @@ typedef struct {
     storage_t storage;
     updater_t updater;
     storage_record_t record;
+    usb_cdc_t usb;
+    command_t command;
+    protocol_parser_t parser;
+    StreamBufferHandle_t usb_rx;
 } app_ctx_t;
 
 /* ----------------------------- Static data ----------------------------- */
@@ -67,6 +89,11 @@ static void print_banner(void);
 static fw_err_t bring_up_storage(app_ctx_t *ctx);
 static fw_err_t bring_up_bsp(app_ctx_t *ctx);
 static fw_err_t bring_up_updater(app_ctx_t *ctx);
+static fw_err_t bring_up_usb(app_ctx_t *ctx);
+static void on_usb_rx(void *ctx, const uint8_t *data, size_t len);
+static fw_err_t on_usb_reply(void *ctx, const uint8_t *data, size_t len);
+static bool is_slot_write_busy(void *ctx);
+static void usb_dispatch_task(void *arg);
 static void confirm_or_roll_back(void);
 static void on_updater_state(void *ctx, updater_state_t state);
 static uint32_t now_ms(void);
@@ -99,6 +126,16 @@ fw_err_t app_run(void) {
     err = bring_up_updater(&s_ctx);
     if (err != FW_OK) {
         ESP_LOGE(TAG, "updater bring-up failed: %s", fw_err_str(err));
+        return err;
+    }
+
+    /* USB last, and deliberately after the updater: the very first frame may
+     * be an UPG_BEGIN, whose refusal depends on asking the update cycle
+     * whether it is already writing the slot. A channel that answered before
+     * there was anything to ask would race on the first command it served. */
+    err = bring_up_usb(&s_ctx);
+    if (err != FW_OK) {
+        ESP_LOGE(TAG, "usb bring-up failed: %s", fw_err_str(err));
         return err;
     }
 
@@ -246,6 +283,116 @@ static void on_updater_state(void *ctx, updater_state_t state) {
     const bsp_err_t err = bsp_led_status_set(&app->bsp, is_busy);
     if ((err != BSP_OK) && (err != BSP_ERR_NO_PIN)) {
         ESP_LOGW(TAG, "status led: %s", bsp_err_str(err));
+    }
+}
+
+/* The command channel, in three parts: a byte pipe the USB task fills, a task
+ * that drains it into the parser, and the dispatcher the parser feeds.
+ *
+ * Bringing the stack up claims the chip's single internal USB PHY for USB-OTG,
+ * which turns USB-Serial-JTAG off - so the console is on UART0 by the time this
+ * runs (see workspace/0xF001/sdkconfig.defaults). */
+static fw_err_t bring_up_usb(app_ctx_t *ctx) {
+    protocol_parser_reset(&ctx->parser);
+
+    ctx->usb_rx = xStreamBufferCreate((size_t)APP_USB_RX_BYTES, 1U);
+    if (ctx->usb_rx == NULL) {
+        return FW_ERR_NO_MEM;
+    }
+
+    const command_cfg_t cmd_cfg = {
+        .on_reply  = on_usb_reply,
+        .reply_ctx = ctx,
+        .is_busy   = is_slot_write_busy,
+        .busy_ctx  = ctx,
+    };
+    fw_err_t err = command_init(&ctx->command, &cmd_cfg);
+    if (err != FW_OK) {
+        return err;
+    }
+
+    /* The task exists before the transport does, so no byte can arrive with
+     * nothing to drain it (R-LFC-09). */
+    if (xTaskCreate(usb_dispatch_task, "usb_cmd", APP_USB_TASK_STACK, ctx, APP_USB_TASK_PRIO,
+                    NULL) != pdPASS) {
+        return FW_ERR_NO_MEM;
+    }
+
+    const usb_cdc_cfg_t usb_cfg = {.on_rx = on_usb_rx, .rx_ctx = ctx};
+    const usb_cdc_err_t usb_err = usb_cdc_init(&ctx->usb, &usb_cfg);
+    if (usb_err != USB_CDC_OK) {
+        ESP_LOGE(TAG, "usb_cdc_init: %s", usb_cdc_err_str(usb_err));
+        /* The driver keeps its own code space (R-LAY-01) but shares the
+         * generic -1..-19 meanings, so the map is one for one (R-ERR-03). */
+        return (usb_err == USB_CDC_ERR_PARAM) ? FW_ERR_PARAM : FW_ERR_IO;
+    }
+    return FW_OK;
+}
+
+/* Runs on the TinyUSB service task, which is also the only task draining the
+ * CDC RX FIFO - so it does exactly one thing and never blocks. A full buffer
+ * drops bytes on purpose: the frame then fails its CRC and the parser resyncs,
+ * which is a retry the host already knows how to do. Blocking here instead
+ * would stall the whole channel. */
+static void on_usb_rx(void *ctx, const uint8_t *data, size_t len) {
+    app_ctx_t *app = (app_ctx_t *)ctx;
+
+    const size_t sent = xStreamBufferSend(app->usb_rx, data, len, 0);
+    if (sent != len) {
+        ESP_LOGW(TAG, "usb rx buffer full, dropped %u of %u bytes", (unsigned)(len - sent),
+                 (unsigned)len);
+    }
+}
+
+static fw_err_t on_usb_reply(void *ctx, const uint8_t *data, size_t len) {
+    app_ctx_t *app              = (app_ctx_t *)ctx;
+    const usb_cdc_err_t usb_err = usb_cdc_write(&app->usb, data, len);
+
+    if (usb_err != USB_CDC_OK) {
+        /* Logged once, here, by the layer that decides what to do about it
+         * (R-LOG-04). Nothing is retried: a host that stopped reading will
+         * send its command again, and the answer is cheap to rebuild. */
+        ESP_LOGW(TAG, "usb reply (%u bytes): %s", (unsigned)len, usb_cdc_err_str(usb_err));
+        return (usb_err == USB_CDC_ERR_TIMEOUT) ? FW_ERR_TIMEOUT : FW_ERR_IO;
+    }
+    return FW_OK;
+}
+
+/* What UPG_BEGIN has to know before it erases a slot: whether the scheduled
+ * HTTP update is already writing the same one. Asked through a callback
+ * because the dispatcher lives below this layer and may not include
+ * updater.h. */
+static bool is_slot_write_busy(void *ctx) {
+    const app_ctx_t *app  = (const app_ctx_t *)ctx;
+    updater_state_t state = UPDATER_STATE_IDLE;
+
+    if (updater_state_get(&app->updater, &state) != FW_OK) {
+        /* Unreadable means unknown, and unknown has to read as busy: refusing
+         * a transfer is recoverable, two writers on one slot is not. */
+        return true;
+    }
+    return (state == UPDATER_STATE_CHECKING) || (state == UPDATER_STATE_DOWNLOADING);
+}
+
+/* Parsing and dispatch happen here, never in the USB callback: a handler may
+ * hold the channel for a flash write, and doing that inside the callback would
+ * stop the FIFO being drained at all. */
+static void usb_dispatch_task(void *arg) {
+    app_ctx_t *ctx = (app_ctx_t *)arg;
+
+    for (;;) {
+        uint8_t chunk[64];
+        const size_t got = xStreamBufferReceive(ctx->usb_rx, chunk, sizeof(chunk), portMAX_DELAY);
+
+        for (size_t i = 0; i < got; ++i) {
+            protocol_req_t req;
+            if (protocol_parser_feed(&ctx->parser, chunk[i], &req)) {
+                const fw_err_t err = command_on_frame(&ctx->command, &req);
+                if (err != FW_OK) {
+                    ESP_LOGW(TAG, "command 0x%04X: %s", (unsigned)req.command, fw_err_str(err));
+                }
+            }
+        }
     }
 }
 

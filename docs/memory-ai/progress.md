@@ -68,6 +68,9 @@ updated: 2026-09-06
 - ⚠ A test function that is not listed in `test/host/runner.c` compiles, links
   and never runs, with nothing going red to say so. The two lists must be kept
   in step by hand.
+- ⚠ **v0.1.0's published assets cannot flash a blank board** — see
+  [rule/known-deviations.md](rule/known-deviations.md). Fixed for the next tag;
+  the tag itself cannot be corrected.
 - ⚠ Everything now runs except the thing that matters most: **no code has ever
   executed on a board.** The image builds, is published, and is byte-addressable
   — and has never booted.

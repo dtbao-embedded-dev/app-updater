@@ -29,6 +29,12 @@ Two things the first run taught, both now fixed:
 Both fixes were then verified by running the same commands in the same image
 locally before pushing again.
 
+**What the first run also hid.** It went green while publishing a set that
+could not flash anything: `flash_args` asked for `ota_data_initial.bin`, which
+was not uploaded, and named the other two by their `build/` subdirectories
+while the assets are flat. A green workflow is not a correct artifact — the
+gate above exists because nothing checked the output against itself.
+
 **What the first `release.yml` run proved.** Both gates fired and let the tag
 through rather than being untested: the tag matched `VERSION`, and
 `docs/CHANGELOG/v0.1.0.md` existed because the release script had written it
@@ -76,9 +82,18 @@ toolchain and the plain runner has the `gh` CLI.
      mismatch means one of the two is a typo, and shipping either is worse than
      shipping neither (R-VER-01).
    - Build, capture the size report.
-   - Collect into `dist/`: the app `.bin` / `.elf` / `.map`, the bootloader, the
-     partition table, the flash args, the size report, and a `SHA256SUMS` over
-     all of them.
+   - Collect into `dist/`, in three groups with different readers:
+
+     | Group | Files | For |
+     |-------|-------|-----|
+     | Provision a blank board | `app-updater-<tag>-factory.bin`, `bootloader.bin`, `partition-table.bin`, `ota_data_initial.bin`, `flash_args` | A bench. The factory image is one `esptool` write at `0x0`; the pieces are there for a partial reflash. |
+     | Update a board | `app_updater.bin` | The OTA payload the updater downloads |
+     | Diagnose one already in the field | `app_updater.elf`, `app_updater.map`, `sdkconfig`, `size-report.txt` | The `.elf` is the only thing that turns a panic backtrace into line numbers, and it must be the exact one that built the `.bin` |
+
+     Plus `SHA256SUMS` over all of them.
+   - **Gate:** every `.bin` named in `flash_args` must exist in `dist/`, and
+     none may still carry a directory path. v0.1.0 failed both halves of this
+     and nobody noticed until the assets were read back.
 2. **`publish`** (on `ubuntu-latest`)
    - **Gate:** `docs/CHANGELOG/<tag>.md` must exist. It should already, because
      an entry is written the day the change is made (R-VER-05); if it does not,

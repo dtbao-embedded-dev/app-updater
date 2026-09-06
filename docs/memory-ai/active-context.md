@@ -19,6 +19,11 @@ wired to something else entirely.
 
 ## Recent changes
 
+- 2026-09-06 — Found by reading v0.1.0's own assets back: the published set
+  could not flash a blank board. `release.yml` now ships a merged factory
+  image, `ota_data_initial.bin` and `sdkconfig`, flattens the `flash_args`
+  paths, and fails if either half of the defect returns.
+
 - 2026-09-06 — **v0.1.0 released.** Cut with `docs/scripts/tool-release.py`:
   seven phases, exit 0. `release.yml` ran for the first time and passed, both
   gates holding. Tag `v0.1.0` is annotated, on `aff615f2`, an ancestor of

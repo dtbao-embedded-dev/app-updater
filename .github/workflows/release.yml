@@ -39,6 +39,10 @@ jobs:
           . "$IDF_PATH/export.sh"
           idf.py -C workspace/0xF001 build
           idf.py -C workspace/0xF001 size | tee size-report.txt
+          # One image, flashed at 0x0, provisions a blank board in a single
+          # command - no offsets to get wrong at a bench.
+          idf.py -C workspace/0xF001 merge-bin \
+            -o "app-updater-${GITHUB_REF_NAME}-factory.bin"
 
       - name: Collect the artifacts a field unit needs
         shell: bash
@@ -46,17 +50,62 @@ jobs:
           set -eu
           build="workspace/0xF001/build"
           mkdir -p dist
-          cp "$build/app_updater.bin"                     dist/
-          cp "$build/app_updater.elf"                     dist/
-          cp "$build/app_updater.map"                     dist/
-          cp "$build/bootloader/bootloader.bin"           dist/
-          cp "$build/partition_table/partition-table.bin" dist/
-          cp "$build/flash_args"                          dist/ || true
-          cp size-report.txt                              dist/
+
+          # Provisioning a blank board.
+          cp "$build/app-updater-${GITHUB_REF_NAME}-factory.bin" dist/
+          cp "$build/bootloader/bootloader.bin"                  dist/
+          cp "$build/partition_table/partition-table.bin"        dist/
+          # v0.1.0 shipped without this and its own flash_args asked for it, so
+          # the published set could not flash anything. Without ota_data the
+          # bootloader has no slot selection to read.
+          cp "$build/ota_data_initial.bin"                       dist/
+          # flash_args names its files with the directories they sit in inside
+          # build/. The assets are flat, so flatten the paths to match or the
+          # @flash_args form resolves nothing.
+          sed 's|bootloader/||; s|partition_table/||' \
+            "$build/flash_args" > dist/flash_args
+
+          # The OTA payload: what the updater downloads and writes to the other
+          # slot. Deliberately not renamed - flash_args refers to it by name.
+          cp "$build/app_updater.bin" dist/
+
+          # Diagnosing a unit that is already in the field. The .elf is the only
+          # thing that can turn a panic backtrace back into line numbers, and it
+          # must be the exact one that produced the .bin.
+          cp "$build/app_updater.elf" dist/
+          cp "$build/app_updater.map" dist/
+
+          # What this image was built from: the resolved config and the budget.
+          cp workspace/0xF001/sdkconfig dist/
+          cp size-report.txt            dist/
+
           # The OTA path checks the image it downloaded; publishing the digest
           # is what lets anyone else check it too.
           ( cd dist && sha256sum ./* > SHA256SUMS )
           ls -l dist
+
+      # A release whose own flash_args names a file it does not ship is worse
+      # than one with no flash_args, because it is only discovered at a bench.
+      - name: Every file flash_args names must be present
+        shell: bash
+        run: |
+          set -eu
+          bad=0
+          # Half of the v0.1.0 defect was a missing file; the other half was a
+          # path. Both have to be checked, because a name that still carries its
+          # build/ directory resolves to nothing among flat assets and the
+          # basename check above would happily pass it.
+          if grep -qE '^0x[0-9a-fA-F]+ +[^ ]*/' dist/flash_args; then
+            echo "::error::flash_args still carries directory paths; the assets are flat"
+            bad=1
+          fi
+          for f in $(grep -oE '[A-Za-z0-9._-]+\.bin' dist/flash_args); do
+            if [ ! -f "dist/$f" ]; then
+              echo "::error::flash_args names $f, which is not in dist/"
+              bad=1
+            fi
+          done
+          [ "$bad" -eq 0 ]
 
       - uses: actions/upload-artifact@v4
         with:

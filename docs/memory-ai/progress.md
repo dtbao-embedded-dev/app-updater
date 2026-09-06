@@ -33,7 +33,8 @@ updated: 2026-09-06
   in the tree. One real finding (a parameter that could be `const`) was found
   and fixed, not suppressed.
 - **The firmware compiles.** `idf.py build` completes in `espressif/idf:v6.1`:
-  1090 targets, `app_updater.bin` 198 KB against a 1.875 MB slot, 90% free.
+  1090 targets, `app_updater.bin` 0x31120 bytes (196 KB) against a 2 MB slot,
+  90% free. Rebuilt clean on the 16 MB table at 240 MHz.
 - **v0.1.0 is released**, cut end to end by `tool-release.py`: seven phases, two
   merged pull requests, an annotated tag on `main`, and eight published
   artifacts. Both workflows green on the runs that produced it.

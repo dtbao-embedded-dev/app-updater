@@ -19,6 +19,30 @@ wired to something else entirely.
 
 ## Recent changes
 
+- 2026-09-06 — **Boot banner, and the BSP now asks the chip.** `app_run()`
+  opens with `print_banner()` — printf, not ESP_LOGI — carrying the git
+  commit — the full 40-character hash, a PRIVATE compile definition from
+  `application/app/CMakeLists.txt` —  chip model/revision/features, core count, clock and MAC. `bsp_init()` reads
+  `flash_size_bytes` from `esp_flash_get_size()` instead of a compiled-in
+  constant, so the board table holds only what the schematic decides. The
+  generated `sdkconfig` moved into `build/` (`SDKCONFIG` in the workspace
+  CMakeLists) so an edit to `sdkconfig.defaults` can no longer be silently
+  ignored. `@author` headers and the unused per-module `*_VERSION_MAJOR/
+  MINOR/PATCH` macros were removed. Verified by a clean rebuild: 1090
+  targets, no warnings under `-Werror`. CPU raised to 240 MHz
+  (`CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240`), verified in the regenerated
+  `build/sdkconfig`.
+
+- 2026-09-06 — **Flash is 16 MB, not 4 MB**, and the table was rebuilt on that.
+  Every partition now starts at `0xF000`, leaving `0x9000 .. 0xF000` (24 KB)
+  reserved and empty behind the table. `app_updater` is 2 MB, `app_firmware`
+  the 13.875 MB remainder — the two app slots are no longer the same size.
+  Two raw data partitions were added, `cfg_factory` (4 KB) and `cfg_setting`
+  (16 KB), both inside the old alignment padding at no cost to either slot.
+  `CONFIG_ESPTOOLPY_FLASHSIZE_16MB` and the BSP board table follow.
+  Verified with ESP-IDF v6.1's `gen_esp32part.py`, not on hardware. See
+  [data/flash-and-partitions.md](data/flash-and-partitions.md).
+
 - 2026-09-06 — **History rewritten once** to strip the
   `Co-Authored-By: Claude ...` trailer from the 17 commits that carried it, on
   `main`, `developing` and `release/v0.1`. `filter-branch --msg-filter` only;

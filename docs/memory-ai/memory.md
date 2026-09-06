@@ -43,7 +43,8 @@ _Generated 2026-09-06 - 25 durable doc(s)._
   in the tree. One real finding (a parameter that could be `const`) was found
   and fixed, not suppressed.
 - **The firmware compiles.** `idf.py build` completes in `espressif/idf:v6.1`:
-  1090 targets, `app_updater.bin` 198 KB against a 1.875 MB slot, 90% free.
+  1090 targets, `app_updater.bin` 0x31120 bytes (196 KB) against a 2 MB slot,
+  90% free. Rebuilt clean on the 16 MB table at 240 MHz.
 - **v0.1.0 is released**, cut end to end by `tool-release.py`: seven phases, two
   merged pull requests, an annotated tag on `main`, and eight published
   artifacts. Both workflows green on the runs that produced it.
@@ -105,6 +106,30 @@ next thing to touch, because its GPIO numbers are placeholders that may be
 wired to something else entirely.
 
 ## Recent changes
+
+- 2026-09-06 — **Boot banner, and the BSP now asks the chip.** `app_run()`
+  opens with `print_banner()` — printf, not ESP_LOGI — carrying the git
+  commit — the full 40-character hash, a PRIVATE compile definition from
+  `application/app/CMakeLists.txt` —  chip model/revision/features, core count, clock and MAC. `bsp_init()` reads
+  `flash_size_bytes` from `esp_flash_get_size()` instead of a compiled-in
+  constant, so the board table holds only what the schematic decides. The
+  generated `sdkconfig` moved into `build/` (`SDKCONFIG` in the workspace
+  CMakeLists) so an edit to `sdkconfig.defaults` can no longer be silently
+  ignored. `@author` headers and the unused per-module `*_VERSION_MAJOR/
+  MINOR/PATCH` macros were removed. Verified by a clean rebuild: 1090
+  targets, no warnings under `-Werror`. CPU raised to 240 MHz
+  (`CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240`), verified in the regenerated
+  `build/sdkconfig`.
+
+- 2026-09-06 — **Flash is 16 MB, not 4 MB**, and the table was rebuilt on that.
+  Every partition now starts at `0xF000`, leaving `0x9000 .. 0xF000` (24 KB)
+  reserved and empty behind the table. `app_updater` is 2 MB, `app_firmware`
+  the 13.875 MB remainder — the two app slots are no longer the same size.
+  Two raw data partitions were added, `cfg_factory` (4 KB) and `cfg_setting`
+  (16 KB), both inside the old alignment padding at no cost to either slot.
+  `CONFIG_ESPTOOLPY_FLASHSIZE_16MB` and the BSP board table follow.
+  Verified with ESP-IDF v6.1's `gen_esp32part.py`, not on hardware. See
+  [data/flash-and-partitions.md](data/flash-and-partitions.md).
 
 - 2026-09-06 — **History rewritten once** to strip the
   `Co-Authored-By: Claude ...` trailer from the 17 commits that carried it, on
@@ -452,12 +477,26 @@ a developer's environment:
 | Knob | Value | Why |
 |------|-------|-----|
 | `CONFIG_IDF_TARGET` | `esp32s3` | The product's chip. |
-| `CONFIG_ESPTOOLPY_FLASHSIZE_4MB` | on | Must change together with `partitions.csv`. |
+| `CONFIG_ESPTOOLPY_FLASHSIZE_16MB` | on | Must change together with `partitions.csv`. |
 | `CONFIG_PARTITION_TABLE_CUSTOM` + `..._FILENAME` | `partitions.csv` | Two OTA slots, no factory. |
+| `CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240` | on | The part's maximum, over ESP-IDF's 160 MHz default: a TLS-over-Wi-Fi fetch is CPU bound, and a longer download has more chances to be interrupted. |
 | `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` | on | A new image gets one boot to confirm itself. |
-| `CONFIG_COMPILER_OPTIMIZATION_SIZE` | on | Two app slots must fit in 4 MB. |
+| `CONFIG_COMPILER_OPTIMIZATION_SIZE` | on | Two app slots must fit in 16 MB. |
 | `CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_ENABLE` | on | Asserts stay on in Release. |
 | `CONFIG_LOG_MAXIMUM_LEVEL_DEBUG` / `CONFIG_LOG_DEFAULT_LEVEL_INFO` | — | Level is a compile-time filter. |
+
+**The generated `sdkconfig` lives in `build/`, not next to the defaults.**
+`workspace/0xF001/CMakeLists.txt` sets `SDKCONFIG` to `${CMAKE_BINARY_DIR}/sdkconfig`
+before including `project.cmake`. ESP-IDF reads `sdkconfig.defaults` only when
+the generated file is absent, so left in the source tree it would outlive every
+clean and silently ignore later edits to the defaults — the failure being a
+partition table built for one flash size against a bootloader header carrying
+another. Down in `build/` it dies with the build directory, and deleting that
+directory is all a changed default needs.
+
+The cost: `idf.py menuconfig` changes are throwaway, cleared by the next clean.
+That is the intent — R-BLD-05 says a knob that matters belongs in
+`sdkconfig.defaults` under version control, not in a developer's working tree.
 
 ## Version single source
 
@@ -754,28 +793,43 @@ record; the deployed unit falls back to defaults, silently losing its
 - [../behavior/config-load-and-save.md](../behavior/config-load-and-save.md) — the load/save algorithm
 
 ### [data] Flash Layout and Partitions
-*`data/flash-and-partitions.md` - The 4 MB partition table, why the two app slots hold two different applications, and the constraints a change must respect. - status: active - source: workspace/0xF001/partitions.csv, workspace/0xF001/sdkconfig.defaults - keywords: partitions.csv, app_updater, app_firmware, ota_0, ota_1, otadata, nvs, phy_init, rollback, CONFIG_ESPTOOLPY_FLASHSIZE_4MB*
+*`data/flash-and-partitions.md` - The 16 MB partition table, why the two app slots hold two different applications, the two small data partitions, and the constraints a change must respect. - status: active - source: workspace/0xF001/partitions.csv, workspace/0xF001/sdkconfig.defaults - keywords: partitions.csv, app_updater, app_firmware, cfg_factory, cfg_setting, ota_0, ota_1, otadata, nvs, phy_init, rollback, CONFIG_ESPTOOLPY_FLASHSIZE_16MB*
 
 # Flash Layout and Partitions
 
-> Two app slots holding two different applications — a small updater and the product firmware — with no factory partition, because the bootloader never rolls back to one.
+> Two app slots holding two different applications — a small updater and the product firmware — with no factory partition, because the bootloader never rolls back to one. Two small data partitions sit in what used to be alignment padding.
 
 ## Shape
 
-Product 0xF001, 4 MB (`0x400000`) SPI flash.
+Product 0xF001, 16 MB (`0x1000000`) SPI flash.
 
 | Name | Type | SubType | Offset | Size | Ends at |
 |------|------|---------|--------|------|---------|
 | *(partition table)* | — | — | `0x8000` | `0xC00` | `0x8C00` |
-| `nvs` | data | nvs | `0x9000` | `0x6000` | `0xF000` |
-| `otadata` | data | ota | `0xF000` | `0x2000` | `0x11000` |
-| `phy_init` | data | phy | `0x11000` | `0x1000` | `0x12000` |
-| `app_updater` | app | ota_0 | `0x20000` | `0x1E0000` | `0x200000` |
-| `app_firmware` | app | ota_1 | `0x200000` | `0x1E0000` | `0x3E0000` |
+| *(reserved, empty)* | — | — | `0x9000` | `0x6000` | `0xF000` |
+| `nvs` | data | nvs | `0xF000` | `0x6000` | `0x15000` |
+| `otadata` | data | ota | `0x15000` | `0x2000` | `0x17000` |
+| `phy_init` | data | phy | `0x17000` | `0x1000` | `0x18000` |
+| `cfg_factory` | data | undefined | `0x18000` | `0x1000` | `0x19000` |
+| `cfg_setting` | data | undefined | `0x19000` | `0x4000` | `0x1D000` |
+| `app_updater` | app | ota_0 | `0x20000` | `0x200000` | `0x220000` |
+| `app_firmware` | app | ota_1 | `0x220000` | `0xDE0000` | `0x1000000` |
 
-Each app slot is 1.875 MB. `0x12000 .. 0x20000` (56 KB) is deliberately unused
-padding, spent to put the first app slot on a 64 KB boundary. `0x3E0000 ..
-0x400000` (128 KB) is free at the top.
+The first partition starts at `0xF000`, not at the earliest legal `0x9000`:
+`0x9000 .. 0xF000` (24 KB) is deliberately left empty behind the partition
+table. Nothing in the build claims it, so it is available for whatever it was
+reserved for without moving anything else.
+
+`app_updater` is 2 MB, `app_firmware` the 13.875 MB that is left. `0x1D000 ..
+0x20000` (12 KB) is unused padding, spent to put the first app slot on a 64 KB
+boundary. Nothing is free at the top of flash any more — `app_firmware` runs to
+the last byte.
+
+Generated and re-read with ESP-IDF v6.1's own `gen_esp32part.py` against
+`--flash-size 16MB`, and built end to end: `idf.py build` emits
+`--flash-size 16MB` in its flash line, places `ota_data_initial.bin` at
+`0x15000`, and `check_sizes.py` reports `app_updater.bin` at `0x31100` bytes
+against a `0x200000` slot, 90% free.
 
 ## The two slots are two different programs
 
@@ -797,27 +851,51 @@ may no longer be able to open. Two ways to buy that back if it ever matters —
 a third app slot on a larger flash, or a `factory` partition holding a
 known-good updater (which is never rolled back but is also never updated).
 
+## `cfg_factory` and `cfg_setting`
+
+Two data partitions, neither large enough to hold an image and neither 64 KB
+aligned. They are named `cfg_` and not `app_` precisely so that no one reads
+them as a third app slot.
+
+| Name | Size | SubType | Why that subtype |
+|------|------|---------|------------------|
+| `cfg_factory` | 4 KB (1 sector) | `undefined` | NVS needs **three** sectors minimum, so 4 KB cannot be an NVS partition. Read and erased raw through `esp_partition_read` / `esp_partition_erase_range`. Intended for provisioning data written in production — serial number, calibration. |
+| `cfg_setting` | 16 KB (4 sectors) | `undefined` | Runtime settings, read and erased raw like `cfg_factory`. Four sectors is also three plus one spare, so it *could* be handed to NVS later by changing the subtype alone — that is the only reason it is this size. |
+
+Both sit after `phy_init`, inside the alignment padding before the first app
+slot, so adding them cost no app-slot space. Nothing in the firmware opens
+either yet
+([interface/storage-api.md](../interface/storage-api.md) still uses the default
+`nvs` partition only).
+
 ## Invariants
 
-1. **No `factory` partition.** Rollback works only between `ota_x` slots.
-2. App partitions must start on a 64 KB boundary. `0x20000` and `0x200000` both
-   satisfy this; an arbitrary size change usually breaks it.
+1. **No `factory` partition.** Rollback works only between `ota_x` slots;
+   `cfg_factory` is a data partition and plays no part in boot selection.
+2. App partitions must start on a 64 KB boundary. `0x20000` and `0x220000` both
+   satisfy this; an arbitrary size change usually breaks it. Data partitions
+   only need 4 KB (sector) alignment.
 3. Nothing may start before `0x9000` — the table occupies `0x8000` for `0xC00`
-   bytes and takes a full 4 KB sector.
+   bytes and takes a full 4 KB sector. Here the first partition starts later
+   still, at `0x9000 + 0x6000 = 0xF000`, by design.
 4. `otadata` must be exactly `0x2000` (two sectors): the bootloader alternates
    between them so a power cut never destroys the only good copy.
-5. The two app slots must be the **same size** while either can be written into
-   the other's place. If the updater is ever shrunk to buy the firmware room,
-   that symmetry — and the fallback with it — is gone.
-6. A partition label is at most 16 characters. `app_updater` (11) and
-   `app_firmware` (12) both fit.
-7. Changing any size means changing `CONFIG_ESPTOOLPY_FLASHSIZE_*` in
+5. The two app slots are **not the same size**: ota_0 is 2 MB, ota_1 is the
+   13.875 MB remainder. The updater always fits either slot; a firmware larger
+   than 2 MB fits only `app_firmware`, so it can never be staged into ota_0.
+   Today's `app_updater.bin` is 198 KB, nowhere near either ceiling.
+6. A partition label is at most 16 characters. All five of ours fit.
+7. Neither `cfg_` partition is NVS today; both are raw. Any NVS partition needs
+   at least three 4 KB sectors, so `cfg_setting` (4) could become one but
+   `cfg_factory` (1) never can.
+8. Changing any size means changing `CONFIG_ESPTOOLPY_FLASHSIZE_*` in
    `sdkconfig.defaults` **in the same commit**, and an OTA image built against
    the old table will not fit the new one — that is a MAJOR version bump.
 
-**Caveat:** these offsets are read straight from the CSV and arithmetic-checked
-(no overlap, both app slots 64 KB aligned, total `0x3E0000` inside 4 MB), but
-have **never been flashed to a device**.
+**Caveat:** the table is arithmetic-checked, accepted by `gen_esp32part.py`
+and built against, but has **never been flashed to a device**. In
+particular nothing has confirmed the part fitted is really 16 MB — `bsp_init()`
+now reads that from the chip, so the first boot log settles it.
 
 ## See also
 
@@ -825,7 +903,7 @@ have **never been flashed to a device**.
 - [../behavior/boot-and-bring-up.md](../behavior/boot-and-bring-up.md) — how the running slot confirms itself
 
 ### [interface] Project Status API (fw)
-*`interface/fw-status-api.md` - The contract of the project-wide status type and its name lookup. - status: active - source: middleware/fw/include/fw.h, middleware/fw/src/fw.c:25-56 - keywords: fw.h, fw_err_t, fw_err_str, FW_OK, FW_VERSION_MAJOR*
+*`interface/fw-status-api.md` - The contract of the project-wide status type and its name lookup. - status: active - source: middleware/fw/include/fw.h, middleware/fw/src/fw.c:25-56 - keywords: fw.h, fw_err_t, fw_err_str, FW_OK, FW_ERR_IO, fw_err_t codes*
 
 # Project Status API (fw)
 
@@ -837,7 +915,6 @@ have **never been flashed to a device**.
 |------|------------------|------|------------------|
 | `fw_err_str` | `const char *fw_err_str(fw_err_t err)` | Maps a status to its constant name | A string literal with static lifetime. Never NULL, never freed by the caller. An unrecognised value yields `"FW_ERR_UNKNOWN"`. |
 
-The header also exports `FW_VERSION_MAJOR` / `_MINOR` / `_PATCH`.
 
 ## Parameters & config
 
@@ -888,7 +965,7 @@ name. The unknown-value fallback lives **after** the switch, not inside it.
 |-------|------|---------|
 | `led_status_gpio` | int32 | Update-in-progress LED, or `BSP_GPIO_NONE` (-1) when absent |
 | `led_active_high` | bool | True when driving the pin high lights the LED |
-| `flash_size_bytes` | uint32 | Total SPI flash on the board |
+| `flash_size_bytes` | uint32 | Total SPI flash, filled in by `bsp_init()` from `esp_flash_get_size()` — not from the board table |
 
 `bsp_cfg_t` carries one field, `board_rev` (uint8), which indexes a compiled-in
 board table. `0` is the only row that exists today.
@@ -920,9 +997,14 @@ board table. `0` is the only row that exists today.
 - Arguments are validated at the top of every public function, before any state
   changes. Private helpers assume that check already happened.
 
-🔴 **Unverified against hardware:** the board table values (`GPIO2`, active-high, 4 MB) are placeholders
-carrying a TODO, never checked against a 0xF001 schematic. They are the single
-point to fix before any bring-up.
+The board table holds only what the schematic decides — the LED pin and its
+polarity. Flash size is asked of the part at init, so it cannot drift from the
+density actually fitted, and a query failure fails `bsp_init()` rather than
+yielding a plausible wrong number.
+
+🔴 **Unverified against hardware:** the two board table values (`GPIO2`,
+active-high) are placeholders carrying a TODO, never checked against a 0xF001
+schematic. They are the single point to fix before any bring-up.
 
 ## See also
 
@@ -1136,7 +1218,7 @@ it rather than silently checking every loop.
 - [../behavior/update-cycle-fsm.md](../behavior/update-cycle-fsm.md) — the state machine and the wrap arithmetic
 
 ### [interface] Developer CLI (tool-esp.py)
-*`interface/tool-esp-cli.md` - The command surface of the repo's single developer entry point and what each command expands to. - status: active - source: docs/scripts/tool-esp.py, .env.esp - keywords: tool-esp.py, .env.esp, IDF_PATH, IDF_PYTHON_ENV_PATH, MSYSTEM, build, flash, monitor, size, clean, menuconfig, format, test, analyse, --port, --check, UNITY_DIR, port detection*
+*`interface/tool-esp-cli.md` - The command surface of the repo's single developer entry point and what each command expands to. - status: active - source: docs/scripts/tool-esp.py, .env.esp - keywords: tool-esp.py, .env.esp, IDF_PATH, IDF_PYTHON_ENV_PATH, MSYSTEM, build, flash, monitor, erase-flash, size, clean, menuconfig, format, test, analyse, --port, --check, UNITY_DIR, port detection*
 
 # Developer CLI (tool-esp.py)
 
@@ -1154,6 +1236,8 @@ invocation, with the port detected.
 | `build` | `idf.py -C workspace/0xF001 build` | |
 | `flash` | `idf.py -C … flash monitor` | Deliberately fused: the boot log is what says whether it worked |
 | `monitor` | `idf.py -C … monitor` | |
+| `erase-flash` | `idf.py -C … erase-flash` | Whole chip. Port detected like the others |
+| `erase-flash --address A --size N` | `esptool --port … erase-region A N` | One region. Goes through esptool: idf.py has erase-flash and erase-otadata and nothing in between |
 | `size` | `idf.py -C … size size-components` | Fused so the per-component breakdown is never skipped |
 | `clean` | `idf.py -C … clean` | |
 | `menuconfig` | `idf.py -C … menuconfig` | |
@@ -1165,9 +1249,27 @@ invocation, with the port detected.
 
 | Flag | Applies to | Meaning |
 |------|-----------|---------|
-| `-p` / `--port` | `flash`, `monitor`, no command | Serial port, e.g. `COM7`. Omit and it is detected. |
+| `-p` / `--port` | `flash`, `monitor`, `erase-flash`, no command | Serial port, e.g. `COM7`. Omit and it is detected. |
+| `--address` / `--size` | `erase-flash` | Region to erase, decimal or `0x` hex. Both or neither; both must be multiples of `0x1000`. `--size all` means “to the end of the flash” |
 | `--check` | `format` | Report instead of rewriting |
 | `--sanitize` | `test` | ASan + UBSan, into a separate `build/san` tree |
+
+**`erase-flash` detects the port like every other port command, and it is
+destructive.** With no `-p` it erases whichever single board is plugged in,
+with no confirmation step, and nothing puts back the nvs and otadata it takes.
+Name the port when more than a bench with one board is involved.
+
+`--address`/`--size` narrow it to a region — `--address 0x19000 --size 0x4000`
+clears `cfg_setting` and leaves the rest alone. Both must be sector multiples;
+an unaligned region is refused here rather than in esptool, because a region
+that starts or ends mid-sector would take a neighbouring partition with it.
+
+`--size all` erases from `--address` to the end of the flash, which is read
+back from `CONFIG_ESPTOOLPY_FLASHSIZE_*MB` in `sdkconfig.defaults` rather than
+written into the script — the same knob the partition table is checked
+against, so the two cannot drift. `--address 0x220000 --size all` clears
+`app_firmware` and nothing before it. An address at or past the end of the
+configured flash is refused, naming the size it was measured against.
 
 **A flag that does not apply is rejected, not ignored.** `format -p COM7` and
 `build --check` both exit 2 with a message naming what the flag is for. A flag
@@ -1324,7 +1426,7 @@ Each of these stops the run before a byte changes, and each names its fix:
 - [../architecture/ci-pipeline.md](../architecture/ci-pipeline.md) — the two workflows it waits on
 
 ### [behavior] Boot and Bring-Up
-*`behavior/boot-and-bring-up.md` - What runs from app_main to the main loop, in what order, and what happens when a step fails. - status: active - source: application/app/src/app.c:64-174, application/app/src/app.c:195-210 - keywords: app_main, app_run, bring_up_storage, bring_up_bsp, bring_up_updater, confirm_or_roll_back, on_updater_state, now_ms, APP_TICK_MS*
+*`behavior/boot-and-bring-up.md` - What runs from app_main to the main loop, in what order, and what happens when a step fails. - status: active - source: application/app/src/app.c:64-174, application/app/src/app.c:195-210 - keywords: app_main, app_run, print_banner, APP_GIT_COMMIT, bring_up_storage, bring_up_bsp, bring_up_updater, confirm_or_roll_back, on_updater_state, now_ms, APP_TICK_MS*
 
 # Boot and Bring-Up
 
@@ -1332,8 +1434,12 @@ Each of these stops the run before a byte changes, and each names its fix:
 
 ## What it does
 
-1. Log identity: project name, version and IDF version, read from the image
-   header. A unit that cannot say what it runs cannot be debugged.
+1. **Print the banner** (`print_banner`): project name, version, git commit,
+   build date and time, IDF version, chip model and revision, feature bits,
+   core count, CPU clock and the Wi-Fi station MAC. A unit that cannot say
+   what it runs cannot be debugged. It uses `printf`, not `ESP_LOGI`, so it
+   carries no level, tag or timestamp and no log-level setting can filter it
+   away. See the note below on what it duplicates.
 2. **Confirm or roll back**, before anything that could make the decision
    impossible. See below.
 3. Zero the one application context struct that owns every module's instance.
@@ -1349,6 +1455,25 @@ Each of these stops the run before a byte changes, and each names its fix:
 
 Each bring-up step returns early on failure with the failure logged; nothing
 starts until every module is up.
+
+## The banner overlaps ESP-IDF's own
+
+ESP-IDF logs an *Application information* block of its own just before
+`app_main()`, from `esp_app_desc.c` under tag `app_init`: project name, app
+version, compile time, ELF SHA256 and IDF version. Four of those lines say the
+same thing the banner says, so a boot log shows both.
+
+What the banner adds that ESP-IDF's block does not have: the **git commit**,
+the **chip model, revision and features**, the **core count and clock**, and
+the **MAC**. Suppressing IDF's block is not free — the `CONFIG_APP_EXCLUDE_*`
+options strip the fields from the image rather than only from the log, which
+would empty the banner too.
+
+`APP_GIT_COMMIT` is the full 40-character hash from `git rev-parse HEAD`, run by
+`application/app/CMakeLists.txt` at **CMake configure time**, as a PRIVATE
+compile definition so the vendor SDK never sees it. It therefore names the
+commit the build tree was last configured on, not necessarily the one checked
+out now, and falls back to `"unknown"` where git is unavailable.
 
 ## Confirm or roll back
 

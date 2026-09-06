@@ -1,0 +1,7 @@
+idf_component_register(SRCS "src/command.c"
+                       INCLUDE_DIRS "include"
+                       REQUIRES fw protocol
+                       PRIV_REQUIRES app_update esp_app_format esp_partition esp_hw_support
+                                     esp_system freertos)
+
+house_warnings(${COMPONENT_LIB})

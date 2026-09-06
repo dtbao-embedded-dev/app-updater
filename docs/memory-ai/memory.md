@@ -7,7 +7,7 @@
 > architecture -> data -> interface -> behavior -> rule (then adr/).
 > Confidence per doc: 🟢 confirmed | 🟡 inferred (verify) | 🔴 gap (needs a human).
 
-_Generated 2026-09-06 - 24 durable doc(s)._
+_Generated 2026-09-06 - 25 durable doc(s)._
 
 ## State (transient)
 
@@ -106,6 +106,14 @@ wired to something else entirely.
 
 ## Recent changes
 
+- 2026-09-06 — **History rewritten once** to strip the
+  `Co-Authored-By: Claude ...` trailer from the 17 commits that carried it, on
+  `main`, `developing` and `release/v0.1`. `filter-branch --msg-filter` only;
+  trees verified identical, commit counts unchanged. Tag `v0.1.0` was recreated
+  and now sits on `38fb9507`. The rule is recorded in
+  [rule/commit-messages.md](rule/commit-messages.md): no AI attribution trailer
+  in a commit message here, ever again.
+
 - 2026-09-06 — Found by reading v0.1.0's own assets back: the published set
   could not flash a blank board. `release.yml` now ships a merged factory
   image, `ota_data_initial.bin` and `sdkconfig`, flattens the `flash_args`
@@ -113,7 +121,7 @@ wired to something else entirely.
 
 - 2026-09-06 — **v0.1.0 released.** Cut with `docs/scripts/tool-release.py`:
   seven phases, exit 0. `release.yml` ran for the first time and passed, both
-  gates holding. Tag `v0.1.0` is annotated, on `aff615f2`, an ancestor of
+  gates holding. Tag `v0.1.0` is annotated, on `38fb9507`, an ancestor of
   `main`; eight artifacts published. `main` was never pushed to directly.
 - 2026-09-06 — `tool-release.py` added: the release procedure as one command,
   with a pre-flight that refuses before writing anything.
@@ -169,6 +177,8 @@ wired to something else entirely.
 
 ## Active decisions
 
+- Commit messages carry no AI co-author or generation trailer. See
+  [rule/commit-messages.md](rule/commit-messages.md).
 - The project-wide status type is `fw_err_t` in `middleware/fw/`, **not**
   `updater_err_t` — that name would collide with the `updater` module prefix.
 - Developer scripts live in `docs/scripts/`, a deliberate departure from the
@@ -2014,7 +2024,7 @@ unit".
 
 ## Current state
 
-**`v0.1.0` is released.** Annotated tag `v0.1.0` on commit `aff615f2`, an
+**`v0.1.0` is released.** Annotated tag `v0.1.0` on commit `38fb9507`, an
 ancestor of `main`, published with eight artifacts. `VERSION` holds `0.1.0`,
 `docs/CHANGELOG/v0.1.0.md` holds its notes, and the root `CHANGELOG.md` has an
 empty `[Unreleased]` plus one index row.
@@ -2037,6 +2047,52 @@ work happens, then run the script.
 - [../architecture/ci-pipeline.md](../architecture/ci-pipeline.md) — the gates that enforce this
 - [../architecture/build-and-toolchain.md](../architecture/build-and-toolchain.md) — how `VERSION` reaches the image
 - [../data/flash-and-partitions.md](../data/flash-and-partitions.md) — why a partition change is MAJOR
+
+### [rule] Commit Messages
+*`rule/commit-messages.md` - The shape of a commit message here, and the attribution trailer that must never appear in one. - status: active - source: .claude/gitconfig.yml, git log - keywords: Conventional Commits, commit message, trailer, Co-Authored-By, attribution, scope, subject, body*
+
+# Commit Messages
+
+## Shape
+
+Conventional Commits, one logical change per commit:
+
+```
+<type>(<scope>): <subject>
+
+<body: why the change was needed, and what it does not do>
+```
+
+- `type` — one of `feat`, `fix`, `docs`, `build`, `ci`, `test`, `chore`.
+- `scope` — optional, the area touched (`scripts`, `workspace`, `bsp`, `ci`).
+- `subject` — imperative, lower case, no trailing period.
+- `body` — prose, wrapped; state what was verified when the change is not
+  self-evident (`Verified in espressif/idf:v6.1: build, test and analyse exit 0`).
+
+## No AI attribution trailer
+
+**A commit message must not carry an AI co-author or generation trailer.** In
+particular, never append:
+
+```
+Co-Authored-By: Claude <...>
+🤖 Generated with Claude Code
+```
+
+The author of a commit here is the person who reviewed and shipped it. Tooling
+that offers such a trailer by default has it switched off; if a default rule
+elsewhere asks for one, this rule wins.
+
+History was rewritten once on 2026-09-06 to strip the trailer from the 17
+commits that carried it, across `main`, `developing`, `release/v0.1` and tag
+`v0.1.0`. Trees were unchanged — messages only.
+
+## Automation
+
+`.claude/gitconfig.yml` drives `skill-support-commit`: it commits, pushes once
+when `auto_push` is set, and never auto-pushes `protected_branches`
+(`main`, `master`). `main` and `developing` are additionally protected by GitHub
+rulesets (no deletion, no force-push; `main` also requires a pull request).
 
 ### [rule] Known Deviations and Open Holes
 *`rule/known-deviations.md` - Every place this repo departs from the house standard on purpose, plus the unfinished work that must not ship. - status: active - source: application/app/src/app.c:176-193, application/updater/src/updater.c:200-215, middleware/storage/src/storage.c:182-207, driver/bsp/src/bsp.c:22-33, CHANGELOG.md, conversation - keywords: SPEC-DEVIATION, TODO, R-VER-08, R-RPO-06, R-RPO-01, gap, self-test, migration*

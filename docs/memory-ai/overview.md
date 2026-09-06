@@ -48,6 +48,7 @@ needs a human before you rely on it).
 | rule | [rule/testing.md](rule/testing.md) | Where a test lives, how to run it without a board, and how to tell a test that passes from a test that works. | active | Unity, ctest, test/host, runner.c, UNITY_DIR, host_tests, esp_log stub, mutation |
 | rule | [rule/static-analysis.md](rule/static-analysis.md) | Which analysers run, what is switched off and why, and how to disposition a finding. | active | clang-tidy, cppcheck, gitleaks, ASan, UBSan, sanitizer, NOLINTNEXTLINE, SANITIZE, analyse |
 | rule | [rule/versioning-and-release.md](rule/versioning-and-release.md) | Where the version number lives, what bumps it, and the order of a release. | active | VERSION, PROJECT_VER, CHANGELOG.md, docs/CHANGELOG, SemVer, Unreleased, esp_app_get_description |
+| rule | [rule/commit-messages.md](rule/commit-messages.md) | The shape of a commit message here, and the attribution trailer that must never appear in one. | active | Conventional Commits, commit message, trailer, Co-Authored-By, attribution, scope, subject, body |
 | rule | [rule/known-deviations.md](rule/known-deviations.md) | Every place this repo departs from the house standard on purpose, plus the unfinished work that must not ship. | active | SPEC-DEVIATION, TODO, R-VER-08, R-RPO-06, R-RPO-01, gap, self-test, migration |
 <!-- END:MAP -->
 

@@ -79,7 +79,7 @@ unit".
 
 ## Current state
 
-**`v0.1.0` is released.** Annotated tag `v0.1.0` on commit `aff615f2`, an
+**`v0.1.0` is released.** Annotated tag `v0.1.0` on commit `38fb9507`, an
 ancestor of `main`, published with eight artifacts. `VERSION` holds `0.1.0`,
 `docs/CHANGELOG/v0.1.0.md` holds its notes, and the root `CHANGELOG.md` has an
 empty `[Unreleased]` plus one index row.

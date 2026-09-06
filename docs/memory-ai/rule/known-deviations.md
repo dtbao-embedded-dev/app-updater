@@ -1,7 +1,7 @@
 ---
 title: Known Deviations and Open Holes
 category: rule
-order: 6
+order: 7
 purpose: Every place this repo departs from the house standard on purpose, plus the unfinished work that must not ship.
 status: active
 updated: 2026-09-06

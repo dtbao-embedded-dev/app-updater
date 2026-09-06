@@ -19,6 +19,14 @@ wired to something else entirely.
 
 ## Recent changes
 
+- 2026-09-06 — **History rewritten once** to strip the
+  `Co-Authored-By: Claude ...` trailer from the 17 commits that carried it, on
+  `main`, `developing` and `release/v0.1`. `filter-branch --msg-filter` only;
+  trees verified identical, commit counts unchanged. Tag `v0.1.0` was recreated
+  and now sits on `38fb9507`. The rule is recorded in
+  [rule/commit-messages.md](rule/commit-messages.md): no AI attribution trailer
+  in a commit message here, ever again.
+
 - 2026-09-06 — Found by reading v0.1.0's own assets back: the published set
   could not flash a blank board. `release.yml` now ships a merged factory
   image, `ota_data_initial.bin` and `sdkconfig`, flattens the `flash_args`
@@ -26,7 +34,7 @@ wired to something else entirely.
 
 - 2026-09-06 — **v0.1.0 released.** Cut with `docs/scripts/tool-release.py`:
   seven phases, exit 0. `release.yml` ran for the first time and passed, both
-  gates holding. Tag `v0.1.0` is annotated, on `aff615f2`, an ancestor of
+  gates holding. Tag `v0.1.0` is annotated, on `38fb9507`, an ancestor of
   `main`; eight artifacts published. `main` was never pushed to directly.
 - 2026-09-06 — `tool-release.py` added: the release procedure as one command,
   with a pre-flight that refuses before writing anything.
@@ -82,6 +90,8 @@ wired to something else entirely.
 
 ## Active decisions
 
+- Commit messages carry no AI co-author or generation trailer. See
+  [rule/commit-messages.md](rule/commit-messages.md).
 - The project-wide status type is `fw_err_t` in `middleware/fw/`, **not**
   `updater_err_t` — that name would collide with the `updater` module prefix.
 - Developer scripts live in `docs/scripts/`, a deliberate departure from the

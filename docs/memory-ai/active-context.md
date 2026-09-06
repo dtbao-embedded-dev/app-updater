@@ -9,12 +9,35 @@ updated: 2026-09-06
 
 ## Current focus
 
-The repository skeleton is complete and documented. Nothing is under active
-edit. The next meaningful move is **getting one real `idf.py build` to pass**,
-which is what converts most of this bank from "written" to "verified".
+Nothing is under active edit. The next meaningful move is **getting one real CI
+run to go green**: the firmware has never been compiled by ESP-IDF and neither
+workflow has ever executed, so the whole target-side story is written rather
+than observed. Everything that could be verified on a PC has been.
 
 ## Recent changes
 
+- 2026-09-06 — CI grown to the six jobs R-SAN asks for: format, cppcheck +
+  clang-tidy, host tests, ASan/UBSan, firmware build, gitleaks. Tool versions
+  pinned. Baseline verified clean by running each locally.
+- 2026-09-06 — Host test harness added under `test/host/`; `tool-esp.py` gained
+  `test` and `analyse`. The wrap test was found to pass against a broken
+  implementation and was rewritten until a mutation made it fail.
+- 2026-09-06 — Partition labels renamed to `app_updater` / `app_firmware`: the
+  two app slots now hold two different programs, which costs the updater its own
+  rollback slot.
+- 2026-09-06 — README rewritten with badges in the R-RPO-08 section order.
+- 2026-09-06 — `docs/CHANGELOG/` removed again: nothing is released, so every
+  entry is back under `[Unreleased]`.
+
+- 2026-09-06 — Changelog split: the root `CHANGELOG.md` now holds only
+  `[Unreleased]` plus a released-version index; `docs/CHANGELOG/v0.1.0.md` holds
+  the first entry. Recorded as a deviation from R-VER-13.
+- 2026-09-06 — Branch protection enabled on GitHub: `main` requires a pull
+  request (0 approvals) and blocks force-push and deletion; `developing` blocks
+  force-push and deletion. No bypass actors, so the owner is bound too.
+  Default branch moved from `developing` to `main`.
+- 2026-09-06 — First 8 commits pushed; branches `main`, `developing` and
+  `release/v0.1` all published and tracking.
 - 2026-09-06 — Memory bank generated: 20 durable docs across the five
   categories, from the source as written.
 - 2026-09-06 — `scripts/fw.py` moved to `docs/scripts/` and renamed
@@ -44,4 +67,9 @@ which is what converts most of this bank from "written" to "verified".
   [rule/known-deviations.md](rule/known-deviations.md).
 - ESP-IDF has no `main` component here; `application/app/` provides `app_main()`
   so that `workspace/` holds no source of ours.
-- Nothing has been committed to git yet — every file in the repo is untracked.
+- The changelog is split per version under `docs/CHANGELOG/`; the root file
+  keeps `[Unreleased]` and the index only.
+- `main` is push-protected with no bypass actor. Every change into it goes
+  through a pull request from `developing`, self-merged (0 approvals required).
+- No git tag exists. `v0.1.0` is a changelog file and a `VERSION` string, not a
+  release.

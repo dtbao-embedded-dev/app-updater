@@ -24,7 +24,7 @@ follow the documented mechanism but are unverified. Treat the first successful
 | Setting | Value |
 |---------|-------|
 | Target | ESP32-S3 |
-| SDK | ESP-IDF 6.x |
+| SDK | ESP-IDF **v6.1** (CI pins `espressif/idf:v6.1`) |
 | Language | C11 (`-std=gnu11`) |
 | Build system | CMake, ESP-IDF component model |
 | Formatter | `clang-format`, config at repo root, requires v15+ |
@@ -78,7 +78,9 @@ Two consequences visible in the source:
 
 🟢 Verified independently: `middleware/fw/src/fw.c` and
 `application/updater/src/updater.c` compile clean under this exact warning set
-with `-Werror` on host GCC 15 (with `esp_log.h` stubbed).
+with `-Werror` on host GCC, through the `test/host/` harness, which applies the
+same list on purpose — a host test must not be able to pass on code the target
+build would reject. See [../rule/testing.md](../rule/testing.md).
 
 ## Configuration knobs
 
@@ -115,6 +117,7 @@ the changelog headings. See
 
 ## See also
 
+- [ci-pipeline.md](ci-pipeline.md) — where this build runs unattended
 - [repo-layout.md](repo-layout.md) — the tree this build compiles
 - [../data/flash-and-partitions.md](../data/flash-and-partitions.md) — the partition table this config selects
 - [../interface/tool-esp-cli.md](../interface/tool-esp-cli.md) — the wrapper that runs this build

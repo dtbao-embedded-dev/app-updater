@@ -31,9 +31,11 @@ static uint32_t s_reply_count;
 static uint32_t s_restarts_when_replied;
 static bool s_busy;
 static uint8_t s_payload[PROTOCOL_MAX_DATA];
+static uint8_t s_image[8192];
 
 /* --------------------- Private function prototypes --------------------- */
 
+static void put_le32(uint8_t *out, uint32_t value);
 static uint32_t get_le32(const uint8_t *in);
 static fw_err_t capture_reply(void *ctx, const uint8_t *data, size_t len);
 static bool report_busy(void *ctx);
@@ -42,6 +44,10 @@ static fw_err_t send(uint32_t command, const uint8_t *data, uint32_t len);
 static int32_t reply_status(void);
 static uint32_t reply_payload_len(void);
 static const uint8_t *reply_payload(void);
+static fw_err_t send_begin(uint8_t target, uint32_t img_size, uint32_t img_crc32,
+                           uint32_t chunk_max);
+static fw_err_t send_write(uint32_t offset, const uint8_t *chunk, uint32_t chunk_len);
+static void fill_image(uint32_t size);
 
 /* ------------------------ Public function prototypes ------------------- */
 
@@ -63,6 +69,20 @@ void test_command_set_boot_slot_refuses_a_slot_with_no_valid_image(void);
 void test_command_reads_both_burned_in_macs(void);
 void test_command_maps_a_mac_read_failure_to_hw(void);
 void test_command_rejects_null_arguments(void);
+void test_command_upgrade_refuses_a_chunk_size_outside_the_band(void);
+void test_command_upgrade_accepts_both_ends_of_the_chunk_band(void);
+void test_command_upgrade_refuses_an_image_that_does_not_fit_before_erasing(void);
+void test_command_upgrade_refuses_the_running_slot(void);
+void test_command_upgrade_refuses_an_unknown_target(void);
+void test_command_upgrade_refuses_a_write_with_no_session(void);
+void test_command_upgrade_refuses_an_offset_out_of_order(void);
+void test_command_upgrade_enforces_the_chunk_rules(void);
+void test_command_upgrade_transfers_a_whole_image(void);
+void test_command_upgrade_end_refuses_a_wrong_image_crc(void);
+void test_command_upgrade_end_refuses_an_incomplete_transfer(void);
+void test_command_upgrade_begin_again_frees_the_first_session(void);
+void test_command_upgrade_refuses_while_the_update_cycle_is_writing(void);
+void test_command_upgrade_maps_a_flash_failure_to_hw(void);
 
 /* -------------------------- Public functions --------------------------- */
 
@@ -358,7 +378,308 @@ void test_command_rejects_null_arguments(void) {
     TEST_ASSERT_EQUAL_INT(FW_ERR_STATE, command_init(&s_cmd, &cfg));
 }
 
+/* --- the Upgrade range ---------------------------------------------------- */
+
+/* The band is 4 KB to 32 KB in 1024 B steps, and a proposal outside it opens
+ * no session at all - so the slot is not erased and the host loses nothing but
+ * a round trip. Below the floor the per-frame overhead dominates; above the
+ * ceiling a whole UPG_WRITE frame no longer fits PROTOCOL_MAX_DATA. */
+void test_command_upgrade_refuses_a_chunk_size_outside_the_band(void) {
+    setup();
+
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_FIRMWARE, 4096U, 0U, 3072U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_BAD_ARG, reply_status());
+
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_FIRMWARE, 4096U, 0U, 4095U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_BAD_ARG, reply_status());
+
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_FIRMWARE, 4096U, 0U, 33792U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_BAD_ARG, reply_status());
+
+    /* Not one erase between them. */
+    TEST_ASSERT_EQUAL_UINT32(0U, esp_fake_ota_begin_count());
+}
+
+void test_command_upgrade_accepts_both_ends_of_the_chunk_band(void) {
+    setup();
+
+    TEST_ASSERT_EQUAL_INT(FW_OK,
+                          send_begin(PROTOCOL_SLOT_FIRMWARE, 65536U, 0U, PROTOCOL_UPG_CHUNK_MIN));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+
+    TEST_ASSERT_EQUAL_INT(FW_OK,
+                          send_begin(PROTOCOL_SLOT_FIRMWARE, 65536U, 0U, PROTOCOL_UPG_CHUNK_CAP));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+
+    /* Two sessions opened, and only the second is still open - the first was
+     * discarded rather than leaked. */
+    TEST_ASSERT_EQUAL_UINT32(2U, esp_fake_ota_begin_count());
+    TEST_ASSERT_EQUAL_UINT32(1U, esp_fake_ota_open_sessions());
+}
+
+/* The host learns immediately, instead of after minutes of writing. */
+void test_command_upgrade_refuses_an_image_that_does_not_fit_before_erasing(void) {
+    setup();
+    esp_fake_set_slot_size(ESP_PARTITION_SUBTYPE_APP_OTA_1, 0x100000U);
+
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_FIRMWARE, 0x100001U, 0U, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_BAD_ARG, reply_status());
+    TEST_ASSERT_EQUAL_UINT32(0U, esp_fake_ota_begin_count());
+
+    /* Exactly the slot size still fits. */
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_FIRMWARE, 0x100000U, 0U, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+
+    /* And a zero-byte image is not an image. */
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_FIRMWARE, 0U, 0U, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_BAD_ARG, reply_status());
+}
+
+/* Overwriting the image underneath the running code is exactly what the
+ * two-slot layout exists to prevent, so it is refused whichever slot is
+ * running - not just for the one this product usually boots. */
+void test_command_upgrade_refuses_the_running_slot(void) {
+    setup();
+
+    esp_fake_set_running_slot(ESP_PARTITION_SUBTYPE_APP_OTA_0);
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_UPDATER, 4096U, 0U, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_STATE, reply_status());
+
+    esp_fake_set_running_slot(ESP_PARTITION_SUBTYPE_APP_OTA_1);
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_FIRMWARE, 4096U, 0U, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_STATE, reply_status());
+
+    TEST_ASSERT_EQUAL_UINT32(0U, esp_fake_ota_begin_count());
+}
+
+void test_command_upgrade_refuses_an_unknown_target(void) {
+    setup();
+
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(2U, 4096U, 0U, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_BAD_ARG, reply_status());
+    TEST_ASSERT_EQUAL_UINT32(0U, esp_fake_ota_begin_count());
+}
+
+void test_command_upgrade_refuses_a_write_with_no_session(void) {
+    setup();
+    fill_image(1024U);
+
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_write(0U, s_image, 1024U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_STATE, reply_status());
+
+    /* A bare UPG_END with nothing open is the same answer. */
+    TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_UPG_END, NULL, 0U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_STATE, reply_status());
+}
+
+/* The transfer is strictly sequential: the offset is on the wire so a host can
+ * prove it has not lost its place, not so it can seek. */
+void test_command_upgrade_refuses_an_offset_out_of_order(void) {
+    setup();
+    fill_image(8192U);
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_FIRMWARE, 8192U, 0U, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+
+    /* Skipping ahead. */
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_write(4096U, s_image, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_STATE, reply_status());
+
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_write(0U, s_image, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+
+    /* Re-sending what already landed is just as much out of order. */
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_write(0U, s_image, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_STATE, reply_status());
+    TEST_ASSERT_EQUAL_UINT32(4096U, esp_fake_ota_written());
+}
+
+/* Every chunk but the last is a multiple of 1024; the last carries the
+ * remainder and is exempt, because an image size is not a multiple of 1024 and
+ * demanding one would mean padding every image. */
+void test_command_upgrade_enforces_the_chunk_rules(void) {
+    setup();
+    fill_image(5000U);
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_FIRMWARE, 5000U, 0U, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+
+    /* Mid-transfer and not a multiple of 1024. */
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_write(0U, s_image, 1500U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_BAD_LEN, reply_status());
+
+    /* Over the accepted chunk_max, though inside the protocol ceiling. */
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_write(0U, s_image, 5120U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_BAD_LEN, reply_status());
+
+    /* An empty chunk is a frame that says nothing. */
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_write(0U, s_image, 0U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_BAD_LEN, reply_status());
+
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_write(0U, s_image, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+
+    /* Running past the declared size is a length error too. */
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_write(4096U, &s_image[4096], 1024U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_BAD_LEN, reply_status());
+
+    /* The remainder, 904 bytes, is the last chunk and is accepted. */
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_write(4096U, &s_image[4096], 904U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+    TEST_ASSERT_EQUAL_UINT32(5000U, esp_fake_ota_written());
+}
+
+/* The whole flow, and the two things that must be true at the end of it: the
+ * bytes that landed are the bytes that were sent, and nothing has been armed. */
+void test_command_upgrade_transfers_a_whole_image(void) {
+    setup();
+    fill_image(5000U);
+    const uint32_t crc = esp_rom_crc32_le(0U, s_image, 5000U);
+
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_FIRMWARE, 5000U, crc, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_write(0U, s_image, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_write(4096U, &s_image[4096], 904U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+
+    TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_UPG_END, NULL, 0U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+
+    TEST_ASSERT_TRUE(esp_fake_ota_finalised());
+    TEST_ASSERT_EQUAL_HEX32(crc, esp_fake_ota_crc());
+    TEST_ASSERT_EQUAL_UINT32(0U, esp_fake_ota_open_sessions());
+
+    /* UPG_END finalises and arms NOTHING - the host follows with Set BOOT_SLOT
+     * and RESTART_APP, which is what keeps a half-written slot unbootable. */
+    TEST_ASSERT_EQUAL_INT(0, (int)esp_fake_boot_slot_armed());
+    TEST_ASSERT_EQUAL_UINT32(0U, esp_fake_restart_count());
+}
+
+/* The right number of bytes arrived and they are the wrong bytes. The slot
+ * must not be finalised, and the session goes rather than sitting open. */
+void test_command_upgrade_end_refuses_a_wrong_image_crc(void) {
+    setup();
+    fill_image(4096U);
+
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_FIRMWARE, 4096U, 0xDEADBEEFU, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_write(0U, s_image, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+
+    TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_UPG_END, NULL, 0U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_HW, reply_status());
+
+    TEST_ASSERT_FALSE(esp_fake_ota_finalised());
+    TEST_ASSERT_TRUE(esp_fake_ota_aborted());
+    TEST_ASSERT_EQUAL_UINT32(0U, esp_fake_ota_open_sessions());
+
+    /* And the session really is gone, so a stray UPG_END finds nothing. */
+    TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_UPG_END, NULL, 0U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_STATE, reply_status());
+}
+
+/* Short of the declared size is a transfer still in progress, so the session
+ * stays open and the host can simply carry on. */
+void test_command_upgrade_end_refuses_an_incomplete_transfer(void) {
+    setup();
+    fill_image(8192U);
+    const uint32_t crc = esp_rom_crc32_le(0U, s_image, 8192U);
+
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_FIRMWARE, 8192U, crc, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_write(0U, s_image, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+
+    TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_UPG_END, NULL, 0U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_STATE, reply_status());
+    TEST_ASSERT_FALSE(esp_fake_ota_finalised());
+
+    /* Still open: finishing the transfer works without starting over. */
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_write(4096U, &s_image[4096], 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+    TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_UPG_END, NULL, 0U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+    TEST_ASSERT_TRUE(esp_fake_ota_finalised());
+}
+
+/* There is no abort opcode: a host that gave up half way just sends UPG_BEGIN
+ * again. That is only safe if the old handle goes first - otherwise a host
+ * retrying repeatedly strands one per attempt, which is the leak the source
+ * spec names explicitly. */
+void test_command_upgrade_begin_again_frees_the_first_session(void) {
+    setup();
+    fill_image(8192U);
+
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_FIRMWARE, 8192U, 0U, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_write(0U, s_image, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+
+    /* Mid-transfer, and it does NOT answer "busy". */
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_FIRMWARE, 8192U, 0U, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+
+    TEST_ASSERT_EQUAL_UINT32(2U, esp_fake_ota_begin_count());
+    TEST_ASSERT_EQUAL_UINT32(1U, esp_fake_ota_open_sessions());
+    TEST_ASSERT_TRUE(esp_fake_ota_aborted());
+
+    /* The new session starts from zero, so offset 0 is what it expects. */
+    TEST_ASSERT_EQUAL_UINT32(0U, esp_fake_ota_written());
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_write(0U, s_image, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+}
+
+/* R7: the HTTP update cycle writes the same slot, so USB yields to it rather
+ * than racing. -5 is retryable, which is the honest answer - the download
+ * finishes and the next UPG_BEGIN is accepted. */
+void test_command_upgrade_refuses_while_the_update_cycle_is_writing(void) {
+    setup();
+    s_busy = true;
+
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_FIRMWARE, 4096U, 0U, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_STATE, reply_status());
+    TEST_ASSERT_EQUAL_UINT32(0U, esp_fake_ota_begin_count());
+
+    s_busy = false;
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_FIRMWARE, 4096U, 0U, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+}
+
+void test_command_upgrade_maps_a_flash_failure_to_hw(void) {
+    setup();
+    fill_image(4096U);
+
+    esp_fake_fail_ota_begin(ESP_FAIL);
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_FIRMWARE, 4096U, 0U, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_HW, reply_status());
+
+    esp_fake_fail_ota_begin(ESP_OK);
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_FIRMWARE, 4096U, 0U, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+
+    esp_fake_fail_ota_write(ESP_FAIL);
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_write(0U, s_image, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_HW, reply_status());
+
+    /* A failed write advanced nothing, so the host may retry the same chunk. */
+    esp_fake_fail_ota_write(ESP_OK);
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_write(0U, s_image, 4096U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+
+    esp_fake_fail_ota_end(ESP_FAIL);
+    TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_UPG_END, NULL, 0U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_HW, reply_status());
+    TEST_ASSERT_FALSE(esp_fake_ota_finalised());
+}
+
 /* -------------------------- Private functions -------------------------- */
+
+static void put_le32(uint8_t *out, uint32_t value) {
+    out[0] = (uint8_t)(value & 0xFFU);
+    out[1] = (uint8_t)((value >> 8) & 0xFFU);
+    out[2] = (uint8_t)((value >> 16) & 0xFFU);
+    out[3] = (uint8_t)((value >> 24) & 0xFFU);
+}
 
 static uint32_t get_le32(const uint8_t *in) {
     return (uint32_t)in[0] | ((uint32_t)in[1] << 8) | ((uint32_t)in[2] << 16) |
@@ -446,6 +767,36 @@ static uint32_t reply_payload_len(void) {
 
 static const uint8_t *reply_payload(void) {
     return &s_reply[PROTOCOL_PREFIX_LEN + PROTOCOL_STATUS_LEN];
+}
+
+/* Builds UPG_BEGIN's 13-byte payload the way a host would. */
+static fw_err_t send_begin(uint8_t target, uint32_t img_size, uint32_t img_crc32,
+                           uint32_t chunk_max) {
+    uint8_t body[PROTOCOL_UPG_BEGIN_LEN];
+
+    body[0] = target;
+    put_le32(&body[1], img_size);
+    put_le32(&body[5], img_crc32);
+    put_le32(&body[9], chunk_max);
+    return send(PROTOCOL_CMD_UPG_BEGIN, body, (uint32_t)sizeof(body));
+}
+
+/* Builds UPG_WRITE's `[offset:4][chunk]`. A zero-length chunk is a legal frame
+ * to send and an illegal one to accept, so it has to be constructible. */
+static fw_err_t send_write(uint32_t offset, const uint8_t *chunk, uint32_t chunk_len) {
+    put_le32(&s_payload[0], offset);
+    if (chunk_len > 0U) {
+        memcpy(&s_payload[PROTOCOL_UPG_OFFSET_LEN], chunk, chunk_len);
+    }
+    return send(PROTOCOL_CMD_UPG_WRITE, s_payload, PROTOCOL_UPG_OFFSET_LEN + chunk_len);
+}
+
+/* A pattern rather than zeros, so a chunk written at the wrong offset changes
+ * the CRC instead of landing on identical bytes. */
+static void fill_image(uint32_t size) {
+    for (uint32_t i = 0; i < size; ++i) {
+        s_image[i] = (uint8_t)((i * 31U) & 0xFFU);
+    }
 }
 
 /*** end of file ***/

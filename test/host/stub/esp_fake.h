@@ -15,6 +15,7 @@
 #include "esp_mac.h"
 #include "esp_partition.h"
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -73,6 +74,32 @@ esp_partition_subtype_t esp_fake_boot_slot_armed(void);
 
 /** @brief Total milliseconds handed to `vTaskDelay()`. */
 uint32_t esp_fake_delay_total_ms(void);
+
+/* --- the OTA write session ------------------------------------------------ */
+
+/** @brief How many times a session was opened, so a rejected request can be
+ *         proved to have erased nothing. */
+uint32_t esp_fake_ota_begin_count(void);
+
+/** @brief Sessions opened but neither ended nor aborted. Must return to 0. */
+uint32_t esp_fake_ota_open_sessions(void);
+
+/** @brief Bytes handed to `esp_ota_write()` in the current session. */
+uint32_t esp_fake_ota_written(void);
+
+/** @brief True once `esp_ota_end()` has marked a slot valid. */
+bool esp_fake_ota_finalised(void);
+
+/** @brief True once a session was thrown away by `esp_ota_abort()`. */
+bool esp_fake_ota_aborted(void);
+
+/** @brief CRC-32 of every byte written, to check what actually landed. */
+uint32_t esp_fake_ota_crc(void);
+
+/** @brief Forces the matching call to fail; ESP_OK clears it. */
+void esp_fake_fail_ota_begin(esp_err_t err);
+void esp_fake_fail_ota_write(esp_err_t err);
+void esp_fake_fail_ota_end(esp_err_t err);
 
 #ifdef __cplusplus
 }

@@ -15,6 +15,7 @@
 #include "esp_mac.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
+#include "esp_rom_crc.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -54,6 +55,20 @@ static esp_err_t s_fail_set_boot;
 static uint32_t s_restart_count;
 static esp_partition_subtype_t s_armed;
 static uint32_t s_delay_total_ms;
+
+/* The OTA write session. `s_ota_open` counts sessions opened and not yet
+ * closed, so a test can prove UPG_BEGIN freed the previous handle instead of
+ * leaking one per retry - the exact defect the source spec warns about. */
+static uint32_t s_ota_begin_count;
+static uint32_t s_ota_open;
+static uint32_t s_ota_written;
+static uint32_t s_ota_crc;
+static uint32_t s_ota_next_handle;
+static bool s_ota_finalised;
+static bool s_ota_aborted;
+static esp_err_t s_fail_ota_begin;
+static esp_err_t s_fail_ota_write;
+static esp_err_t s_fail_ota_end;
 
 /* --------------------- Private function prototypes --------------------- */
 
@@ -100,6 +115,17 @@ void esp_fake_reset(void) {
     s_restart_count  = 0U;
     s_armed          = (esp_partition_subtype_t)0;
     s_delay_total_ms = 0U;
+
+    s_ota_begin_count = 0U;
+    s_ota_open        = 0U;
+    s_ota_written     = 0U;
+    s_ota_crc         = 0U;
+    s_ota_next_handle = 1U; /* 0 is left meaning "no handle" */
+    s_ota_finalised   = false;
+    s_ota_aborted     = false;
+    s_fail_ota_begin  = ESP_OK;
+    s_fail_ota_write  = ESP_OK;
+    s_fail_ota_end    = ESP_OK;
 }
 
 void esp_fake_set_running_slot(esp_partition_subtype_t subtype) {
@@ -163,6 +189,42 @@ esp_partition_subtype_t esp_fake_boot_slot_armed(void) {
 
 uint32_t esp_fake_delay_total_ms(void) {
     return s_delay_total_ms;
+}
+
+uint32_t esp_fake_ota_begin_count(void) {
+    return s_ota_begin_count;
+}
+
+uint32_t esp_fake_ota_open_sessions(void) {
+    return s_ota_open;
+}
+
+uint32_t esp_fake_ota_written(void) {
+    return s_ota_written;
+}
+
+bool esp_fake_ota_finalised(void) {
+    return s_ota_finalised;
+}
+
+bool esp_fake_ota_aborted(void) {
+    return s_ota_aborted;
+}
+
+uint32_t esp_fake_ota_crc(void) {
+    return s_ota_crc;
+}
+
+void esp_fake_fail_ota_begin(esp_err_t err) {
+    s_fail_ota_begin = err;
+}
+
+void esp_fake_fail_ota_write(esp_err_t err) {
+    s_fail_ota_write = err;
+}
+
+void esp_fake_fail_ota_end(esp_err_t err) {
+    s_fail_ota_end = err;
 }
 
 /* --------------------------- The fakes proper -------------------------- */
@@ -231,6 +293,78 @@ esp_err_t esp_ota_set_boot_partition(const esp_partition_t *partition) {
         return s_fail_set_boot;
     }
     s_armed = partition->subtype;
+    return ESP_OK;
+}
+
+esp_err_t esp_ota_begin(const esp_partition_t *partition, size_t image_size,
+                        esp_ota_handle_t *out_handle) {
+    if ((partition == NULL) || (out_handle == NULL)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_fail_ota_begin != ESP_OK) {
+        return s_fail_ota_begin;
+    }
+    if ((image_size != OTA_SIZE_UNKNOWN) && (image_size > partition->size)) {
+        /* The real call refuses this too, but the command layer is supposed to
+         * have caught it first - the point of the fake is that a test can tell
+         * which of the two did. */
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    s_ota_begin_count += 1U;
+    s_ota_open += 1U;
+    s_ota_written = 0U;
+    s_ota_crc     = 0U;
+    *out_handle   = s_ota_next_handle;
+    s_ota_next_handle += 1U;
+    return ESP_OK;
+}
+
+esp_err_t esp_ota_write(esp_ota_handle_t handle, const void *data, size_t size) {
+    if ((handle == 0U) || (data == NULL) || (size == 0U)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_ota_open == 0U) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (s_fail_ota_write != ESP_OK) {
+        return s_fail_ota_write;
+    }
+
+    /* Folded rather than stored: the tests care that the right bytes arrived
+     * in the right order, not about keeping 13 MB of them around. */
+    s_ota_crc = esp_rom_crc32_le(s_ota_crc, (const uint8_t *)data, (uint32_t)size);
+    s_ota_written += (uint32_t)size;
+    return ESP_OK;
+}
+
+esp_err_t esp_ota_end(esp_ota_handle_t handle) {
+    if (handle == 0U) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_ota_open == 0U) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (s_fail_ota_end != ESP_OK) {
+        /* The real call frees the session even when validation fails. */
+        s_ota_open -= 1U;
+        return s_fail_ota_end;
+    }
+
+    s_ota_open -= 1U;
+    s_ota_finalised = true;
+    return ESP_OK;
+}
+
+esp_err_t esp_ota_abort(esp_ota_handle_t handle) {
+    if (handle == 0U) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_ota_open == 0U) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    s_ota_open -= 1U;
+    s_ota_aborted = true;
     return ESP_OK;
 }
 

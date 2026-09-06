@@ -69,6 +69,30 @@ typedef struct {
 } command_cfg_t;
 
 /**
+ * @brief   One in-flight image transfer.
+ *
+ * The fields are the module's business; they sit in the public struct only
+ * because the caller allocates the instance. `ota_handle` keeps the vendor
+ * handle as a plain word so no SDK type reaches this header (R-LAY-03), the
+ * same trick `storage_t` uses for its NVS handle.
+ *
+ * There is no abort opcode, so a session ends exactly three ways: UPG_END
+ * finalises it, the next UPG_BEGIN throws it away, or a reboot forgets it. All
+ * three are safe, because an unfinished slot is never armed - only UPG_END,
+ * after the whole-image CRC matches, touches anything a bootloader reads.
+ */
+typedef struct {
+    bool is_open;        /**< A transfer is in progress.                     */
+    uint8_t target;      /**< Slot being written, PROTOCOL_SLOT_*.           */
+    uint32_t img_size;   /**< Total image bytes the host declared.           */
+    uint32_t img_crc32;  /**< CRC-32 the finished image must match.          */
+    uint32_t chunk_max;  /**< Accepted chunk size, enforced on every write.  */
+    uint32_t written;    /**< Bytes written, and the next offset expected.   */
+    uint32_t crc;        /**< Running CRC-32 over what has been written.     */
+    uint32_t ota_handle; /**< Vendor handle, opaque here (R-LAY-03).         */
+} command_upgrade_t;
+
+/**
  * @brief   Dispatcher instance. Caller allocates; the module owns the contents.
  *
  * Carries the response frame buffer, which is the second of the two
@@ -78,6 +102,7 @@ typedef struct {
 typedef struct {
     bool is_init;                      /**< Lifecycle state, checked by ops. */
     command_cfg_t cfg;                 /**< Copy of the config.              */
+    command_upgrade_t upgrade;         /**< The in-flight transfer, if any.  */
     uint8_t frame[PROTOCOL_MAX_FRAME]; /**< The response being built.        */
 } command_t;
 

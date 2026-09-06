@@ -70,7 +70,12 @@ fw_err_t command_deinit(command_t *cmd) {
         return FW_ERR_PARAM;
     }
 
-    /* Repeatable and safe on a half-built instance (R-LFC-04). */
+    /* Repeatable and safe on a half-built instance (R-LFC-04). An open
+     * transfer is thrown away rather than finalised: a slot half written is a
+     * slot nothing should boot, and only UPG_END makes one bootable. */
+    if (cmd->is_init && cmd->upgrade.is_open) {
+        (void)esp_ota_abort((esp_ota_handle_t)cmd->upgrade.ota_handle);
+    }
     memset(cmd, 0, sizeof(*cmd));
     return FW_OK;
 }
@@ -153,12 +158,13 @@ static protocol_status_t serve(command_t *cmd, const protocol_req_t *req, uint8_
             return handle_get_mac(ESP_MAC_BT, payload, payload_len);
 
         case PROTOCOL_CMD_UPG_BEGIN:
+            return command_upgrade_begin(cmd, req);
+
         case PROTOCOL_CMD_UPG_WRITE:
+            return command_upgrade_write(cmd, req);
+
         case PROTOCOL_CMD_UPG_END:
-            /* TODO(dtbao): the upgrade session lands in command_upgrade.c
-             * (task T4). Until it does these three answer -7, which disagrees
-             * with the command map on purpose and for exactly one task. */
-            return PROTOCOL_ERR_UNSUPPORTED;
+            return command_upgrade_end(cmd);
 
         default:
             /* Unreachable: the map already said this opcode is served, so a

@@ -1,0 +1,100 @@
+name: Release
+
+# A tag is what makes a release real (R-VER-04). This workflow refuses to
+# publish one that disagrees with VERSION or that has no changelog entry, so
+# the three can never drift apart.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build 0xF001
+    runs-on: ubuntu-latest
+    container: espressif/idf:v6.1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trust the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # R-VER-01: one source of truth. If the tag and VERSION disagree, one of
+      # them is a typo and shipping either is worse than shipping neither.
+      - name: Tag must match VERSION
+        shell: bash
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          file_version="$(tr -d '[:space:]' < VERSION)"
+          echo "tag=$tag_version  VERSION=$file_version"
+          if [ "$tag_version" != "$file_version" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match VERSION ($file_version)"
+            exit 1
+          fi
+
+      - name: Build
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py -C workspace/0xF001 build
+          idf.py -C workspace/0xF001 size | tee size-report.txt
+
+      - name: Collect the artifacts a field unit needs
+        shell: bash
+        run: |
+          set -eu
+          build="workspace/0xF001/build"
+          mkdir -p dist
+          cp "$build/app_updater.bin"                     dist/
+          cp "$build/app_updater.elf"                     dist/
+          cp "$build/app_updater.map"                     dist/
+          cp "$build/bootloader/bootloader.bin"           dist/
+          cp "$build/partition_table/partition-table.bin" dist/
+          cp "$build/flash_args"                          dist/ || true
+          cp size-report.txt                              dist/
+          # The OTA path checks the image it downloaded; publishing the digest
+          # is what lets anyone else check it too.
+          ( cd dist && sha256sum ./* > SHA256SUMS )
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ github.ref_name }}
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: publish
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: firmware-${{ github.ref_name }}
+          path: dist
+
+      # R-VER-05: the changelog entry is written the day the change is made, so
+      # by release time the file already exists. No file means the release was
+      # not prepared, and an unexplained binary is not a release.
+      - name: Release notes must already exist
+        shell: bash
+        run: |
+          notes="docs/CHANGELOG/${GITHUB_REF_NAME}.md"
+          if [ ! -f "$notes" ]; then
+            echo "::error::missing $notes - move the [Unreleased] section into it first"
+            exit 1
+          fi
+          echo "notes=$notes" >> "$GITHUB_ENV"
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file "$notes" \
+            --verify-tag \
+            dist/*

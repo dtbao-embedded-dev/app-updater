@@ -96,13 +96,13 @@ Not yet measured on a board — every number below is a placeholder from
 the first bring-up.
 
 - Status LED on **GPIO2**, active high. `BSP_GPIO_NONE` disables it.
-- **4 MB** SPI flash. The two app slots hold **two different applications**, not
+- **16 MB** SPI flash. The two app slots hold **two different applications**, not
   two copies of one:
 
   | Partition | SubType | Size | Holds |
   |-----------|---------|------|-------|
-  | `app_updater` | `ota_0` | 1.875 MB | this repo |
-  | `app_firmware` | `ota_1` | 1.875 MB | the sibling `app-firmware` repo |
+  | `app_updater` | `ota_0` | 2 MB | this repo |
+  | `app_firmware` | `ota_1` | 13.875 MB | the sibling `app-firmware` repo |
 
   A firmware that fails to confirm itself falls back to the updater, which can
   fetch a replacement. **The cost: there is only one updater image, so the

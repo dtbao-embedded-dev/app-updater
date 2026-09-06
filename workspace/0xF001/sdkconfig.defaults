@@ -1,14 +1,28 @@
 # R-BLD-05: every build knob is versioned here, never in a developer
 # environment. A build that only works on one laptop is not a build.
+#
+# ESP-IDF reads this file ONLY when the generated sdkconfig does not exist.
+# CMakeLists.txt puts that file inside build/ for exactly this reason, so
+# deleting the build directory is enough to make an edit here take effect.
+# Left in the source tree it would outlive every clean and go on building a
+# 16 MB partition table against a bootloader header that still said 4 MB.
 
 CONFIG_IDF_TARGET="esp32s3"
 
-# 4 MB flash. Change this and partitions.csv in the same commit.
-CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+# 16 MB flash. Change this and partitions.csv in the same commit.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 
-# Two OTA slots, no factory partition - see partitions.csv.
+# Two OTA slots, no factory partition, plus two small data partitions
+# (cfg_factory, cfg_setting) - see partitions.csv.
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# 240 MHz, the part's maximum, rather than the 160 MHz ESP-IDF defaults to.
+# An OTA fetch is TLS over Wi-Fi and the CPU is what pays for it; a download
+# that runs longer is a download with more chances to be interrupted. The
+# cost is current draw, which matters to a mains-powered product far less
+# than a failed update does.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 
 # R-VER-08: a freshly flashed image gets exactly one boot to confirm itself,
 # otherwise the bootloader reverts to the previous one. The confirmation lives

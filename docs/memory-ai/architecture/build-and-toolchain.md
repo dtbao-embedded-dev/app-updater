@@ -103,12 +103,26 @@ a developer's environment:
 | Knob | Value | Why |
 |------|-------|-----|
 | `CONFIG_IDF_TARGET` | `esp32s3` | The product's chip. |
-| `CONFIG_ESPTOOLPY_FLASHSIZE_4MB` | on | Must change together with `partitions.csv`. |
+| `CONFIG_ESPTOOLPY_FLASHSIZE_16MB` | on | Must change together with `partitions.csv`. |
 | `CONFIG_PARTITION_TABLE_CUSTOM` + `..._FILENAME` | `partitions.csv` | Two OTA slots, no factory. |
+| `CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240` | on | The part's maximum, over ESP-IDF's 160 MHz default: a TLS-over-Wi-Fi fetch is CPU bound, and a longer download has more chances to be interrupted. |
 | `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` | on | A new image gets one boot to confirm itself. |
-| `CONFIG_COMPILER_OPTIMIZATION_SIZE` | on | Two app slots must fit in 4 MB. |
+| `CONFIG_COMPILER_OPTIMIZATION_SIZE` | on | Two app slots must fit in 16 MB. |
 | `CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_ENABLE` | on | Asserts stay on in Release. |
 | `CONFIG_LOG_MAXIMUM_LEVEL_DEBUG` / `CONFIG_LOG_DEFAULT_LEVEL_INFO` | — | Level is a compile-time filter. |
+
+**The generated `sdkconfig` lives in `build/`, not next to the defaults.**
+`workspace/0xF001/CMakeLists.txt` sets `SDKCONFIG` to `${CMAKE_BINARY_DIR}/sdkconfig`
+before including `project.cmake`. ESP-IDF reads `sdkconfig.defaults` only when
+the generated file is absent, so left in the source tree it would outlive every
+clean and silently ignore later edits to the defaults — the failure being a
+partition table built for one flash size against a bootloader header carrying
+another. Down in `build/` it dies with the build directory, and deleting that
+directory is all a changed default needs.
+
+The cost: `idf.py menuconfig` changes are throwaway, cleared by the next clean.
+That is the intent — R-BLD-05 says a knob that matters belongs in
+`sdkconfig.defaults` under version control, not in a developer's working tree.
 
 ## Version single source
 

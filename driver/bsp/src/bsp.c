@@ -13,18 +13,18 @@
 
 #include "driver/gpio.h"
 #include "esp_err.h"
+#include "esp_flash.h"
 #include "esp_log.h"
 
 #include <string.h>
 
 /* --------------------------- Private macros ---------------------------- */
 
-/* TODO(dtbao): fill these three in from the 0xF001 schematic before the first
+/* TODO(dtbao): fill these two in from the 0xF001 schematic before the first
  * board bring-up. They are the only pin literals in the repo (R-RPO-04) and
  * the values below are placeholders, not a measured pinout. */
 #define BSP_REV_A_LED_STATUS_GPIO 2
 #define BSP_REV_A_LED_ACTIVE_HIGH true
-#define BSP_REV_A_FLASH_SIZE      (4U * 1024U * 1024U)
 
 /* ---------------------------- Private types ---------------------------- */
 
@@ -32,13 +32,14 @@
 
 static const char *TAG = "bsp";
 
-/** Board table, indexed by revision. Add a row rather than editing one. */
+/** Board table, indexed by revision. Add a row rather than editing one.
+ *  Only what the schematic decides lives here; `flash_size_bytes` is asked
+ *  of the chip at init instead, so it cannot drift from the part fitted. */
 static const bsp_board_t s_board_table[] = {
     [0] =
         {
-            .led_status_gpio  = BSP_REV_A_LED_STATUS_GPIO,
-            .led_active_high  = BSP_REV_A_LED_ACTIVE_HIGH,
-            .flash_size_bytes = BSP_REV_A_FLASH_SIZE,
+            .led_status_gpio = BSP_REV_A_LED_STATUS_GPIO,
+            .led_active_high = BSP_REV_A_LED_ACTIVE_HIGH,
         },
 };
 
@@ -78,6 +79,15 @@ bsp_err_t bsp_init(bsp_t *dev, const bsp_cfg_t *cfg) {
 
     memset(dev, 0, sizeof(*dev));
     dev->board = s_board_table[cfg->board_rev];
+
+    /* Read from the part rather than compiled in: a board built with the
+     * wrong density, or a table nobody updated, is then a value that differs
+     * from partitions.csv instead of one that silently agrees with it. */
+    const esp_err_t flash_err = esp_flash_get_size(NULL, &dev->board.flash_size_bytes);
+    if (flash_err != ESP_OK) {
+        ESP_LOGE(TAG, "flash size query failed: esp_err=0x%x", (unsigned)flash_err);
+        return from_esp_err(flash_err);
+    }
 
     if (dev->board.led_status_gpio != BSP_GPIO_NONE) {
         const gpio_config_t io = {

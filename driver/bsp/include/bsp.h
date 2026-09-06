@@ -56,7 +56,7 @@ typedef enum {
 typedef struct {
     int32_t led_status_gpio;   /**< Update-in-progress LED, BSP_GPIO_NONE if absent. */
     bool led_active_high;      /**< true when driving the pin high lights the LED.   */
-    uint32_t flash_size_bytes; /**< Total SPI flash on the board, from the part.     */
+    uint32_t flash_size_bytes; /**< Total SPI flash, read from the chip by bsp_init. */
 } bsp_board_t;
 
 /** @brief Configuration for one BSP instance. */

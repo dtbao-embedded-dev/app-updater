@@ -32,7 +32,7 @@ keywords: bsp.h, bsp_init, bsp_deinit, bsp_board_get, bsp_led_status_set, bsp_er
 |-------|------|---------|
 | `led_status_gpio` | int32 | Update-in-progress LED, or `BSP_GPIO_NONE` (-1) when absent |
 | `led_active_high` | bool | True when driving the pin high lights the LED |
-| `flash_size_bytes` | uint32 | Total SPI flash on the board |
+| `flash_size_bytes` | uint32 | Total SPI flash, filled in by `bsp_init()` from `esp_flash_get_size()` — not from the board table |
 
 `bsp_cfg_t` carries one field, `board_rev` (uint8), which indexes a compiled-in
 board table. `0` is the only row that exists today.
@@ -64,9 +64,14 @@ board table. `0` is the only row that exists today.
 - Arguments are validated at the top of every public function, before any state
   changes. Private helpers assume that check already happened.
 
-🔴 **Unverified against hardware:** the board table values (`GPIO2`, active-high, 4 MB) are placeholders
-carrying a TODO, never checked against a 0xF001 schematic. They are the single
-point to fix before any bring-up.
+The board table holds only what the schematic decides — the LED pin and its
+polarity. Flash size is asked of the part at init, so it cannot drift from the
+density actually fitted, and a query failure fails `bsp_init()` rather than
+yielding a plausible wrong number.
+
+🔴 **Unverified against hardware:** the two board table values (`GPIO2`,
+active-high) are placeholders carrying a TODO, never checked against a 0xF001
+schematic. They are the single point to fix before any bring-up.
 
 ## See also
 

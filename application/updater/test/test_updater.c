@@ -21,7 +21,23 @@
 /* --------------------- Private function prototypes --------------------- */
 
 static updater_cfg_t test_cfg(void);
-static updater_state_t state_of(updater_t *up);
+static updater_state_t state_of(const updater_t *up);
+
+/* ------------------------ Public function prototypes ------------------- */
+
+/* The runner in test/host/runner.c calls these. Declaring them here is what
+ * satisfies -Wmissing-prototypes under the house warning set (R-BLD-01) --
+ * a test function is an external symbol like any other. */
+void test_updater_step_before_start_returns_err_state(void);
+void test_updater_init_twice_returns_err_state(void);
+void test_updater_rejects_null_arguments(void);
+void test_updater_init_rejects_an_interval_past_the_horizon(void);
+void test_updater_stays_idle_until_the_interval_elapses(void);
+void test_updater_fires_across_the_millisecond_wrap(void);
+void test_updater_rearms_after_a_check_finds_nothing(void);
+void test_updater_never_checks_when_the_interval_is_zero(void);
+void test_updater_stop_and_deinit_are_repeatable(void);
+void test_updater_state_str_names_every_state(void);
 
 /* -------------------------- Public functions --------------------------- */
 
@@ -94,12 +110,18 @@ void test_updater_fires_across_the_millisecond_wrap(void) {
     TEST_ASSERT_EQUAL_INT(FW_OK, updater_init(&up, &cfg));
     TEST_ASSERT_EQUAL_INT(FW_OK, updater_start(&up, start_ms));
 
-    /* 0xFFFFFF00 + 1000 wraps next_due_ms to 0x000002E8; not due one tick
-     * before that, due on it. Comparing the raw timestamps would say the
-     * opposite for the whole 744 ms after the wrap. */
+    /* start_ms + 1000 wraps next_due_ms round to 0x000002E8, so for the 1024 ms
+     * before the wrap `now_ms` is NUMERICALLY LARGER than the deadline while
+     * still being earlier than it. This tick is the one that fails if the due
+     * test ever becomes a plain `now_ms >= next_due_ms`. */
+    TEST_ASSERT_EQUAL_INT(FW_OK, updater_step(&up, 0xFFFFFFF0U));
+    TEST_ASSERT_EQUAL_INT(UPDATER_STATE_IDLE, state_of(&up));
+
+    /* Past the wrap now, but one tick short of the deadline. */
     TEST_ASSERT_EQUAL_INT(FW_OK, updater_step(&up, start_ms + TEST_INTERVAL_MS - 1U));
     TEST_ASSERT_EQUAL_INT(UPDATER_STATE_IDLE, state_of(&up));
 
+    /* On the deadline. */
     TEST_ASSERT_EQUAL_INT(FW_OK, updater_step(&up, start_ms + TEST_INTERVAL_MS));
     TEST_ASSERT_EQUAL_INT(UPDATER_STATE_CHECKING, state_of(&up));
 }
@@ -168,7 +190,7 @@ static updater_cfg_t test_cfg(void) {
     return cfg;
 }
 
-static updater_state_t state_of(updater_t *up) {
+static updater_state_t state_of(const updater_t *up) {
     updater_state_t state = UPDATER_STATE_FAILED;
     TEST_ASSERT_EQUAL_INT(FW_OK, updater_state_get(up, &state));
     return state;

@@ -21,6 +21,19 @@ updated: 2026-09-06
   `workspace/`.
 - `docs/scripts/tool-esp.py` resolves the repo root and the workspace correctly
   and refuses to run without `IDF_PATH`.
+- The repo is published: 8 commits on `main`, `developing` and `release/v0.1`,
+  with branch protection on the first two **verified by an actual rejected
+  push**, not just by the API response.
+- A host test harness that actually runs: 13 Unity tests, green, built under the
+  firmware's own `-Werror` warning set. **Proven to have teeth** — breaking the
+  wrap-safe due check makes exactly one test go red, and restoring it makes the
+  suite green again.
+- Static analysis at a clean baseline, verified by running it locally **and in
+  the CI container**: `cppcheck` 0 findings, `clang-tidy` 0 findings, no secrets
+  in the tree. One real finding (a parameter that could be `const`) was found
+  and fixed, not suppressed.
+- **The firmware compiles.** `idf.py build` completes in `espressif/idf:v6.1`:
+  1090 targets, `app_updater.bin` 198 KB against a 1.875 MB slot, 90% free.
 
 ## What's left
 
@@ -31,20 +44,27 @@ updated: 2026-09-06
    boot partition.
 4. Network bring-up (Wi-Fi or Ethernet) — not in this repo at all.
 5. Real board values in the BSP table, from the 0xF001 schematic.
-6. A host test runner for the two Unity files.
+6. An **on-target** smoke test. The host suite runs; nothing exercises a board.
 7. Record migration in `storage`, before any field release.
+8. Enable `gcc -fanalyzer` — deferred on purpose, not forgotten. The trigger is
+   the first code that does buffer arithmetic, parsing, or allocation; see
+   [rule/static-analysis.md](rule/static-analysis.md) for the exact list and the
+   two-line change it takes.
 
 ## Known issues
 
-- 🔴 **The ESP-IDF build has never been run.** No `IDF_PATH` was available in the
-  session that wrote this repo, so the component names in `PRIV_REQUIRES`, the
-  main-less build shape, and the partition table are all unverified. See
-  [architecture/build-and-toolchain.md](architecture/build-and-toolchain.md).
+- ⚠ The firmware has been **built** but never **flashed**. The partition table
+  is accepted by the build and the image fits with 90% of its slot free; whether
+  the layout boots on real hardware is still unknown.
 - 🔴 `spec-verify` has never been run against this repo. It will at minimum flag
   the deviations in
   [rule/known-deviations.md](rule/known-deviations.md).
-- ⚠ The two Unity test files are in no `SRCS`, so the firmware build passes
-  without them — silently. A broken test is currently invisible.
+- ⚠ A test function that is not listed in `test/host/runner.c` compiles, links
+  and never runs, with nothing going red to say so. The two lists must be kept
+  in step by hand.
+- 🔴 **`release.yml` has never executed.** No tag has been pushed, so the
+  version gate, the artifact collection and `gh release create` are written
+  against documented behaviour, not observed behaviour. `ci.yml` has run.
 - ⚠ The first build may fail on `-Wconversion`/`-Werror` in SDK macros expanded
   inside our translation units. That is the rule working; fix at the call site,
   never by silencing the warning.

@@ -7,7 +7,7 @@
 > architecture -> data -> interface -> behavior -> rule (then adr/).
 > Confidence per doc: 🟢 confirmed | 🟡 inferred (verify) | 🔴 gap (needs a human).
 
-_Generated 2026-09-06 - 20 durable doc(s)._
+_Generated 2026-09-06 - 23 durable doc(s)._
 
 ## State (transient)
 
@@ -31,6 +31,16 @@ _Generated 2026-09-06 - 20 durable doc(s)._
   `workspace/`.
 - `docs/scripts/tool-esp.py` resolves the repo root and the workspace correctly
   and refuses to run without `IDF_PATH`.
+- The repo is published: 8 commits on `main`, `developing` and `release/v0.1`,
+  with branch protection on the first two **verified by an actual rejected
+  push**, not just by the API response.
+- A host test harness that actually runs: 13 Unity tests, green, built under the
+  firmware's own `-Werror` warning set. **Proven to have teeth** — breaking the
+  wrap-safe due check makes exactly one test go red, and restoring it makes the
+  suite green again.
+- Static analysis at a clean baseline, verified by running it: `cppcheck` 0
+  findings, `clang-tidy` 0 findings, no secrets in the tree. One real finding
+  (a parameter that could be `const`) was found and fixed, not suppressed.
 
 ## What's left
 
@@ -41,8 +51,12 @@ _Generated 2026-09-06 - 20 durable doc(s)._
    boot partition.
 4. Network bring-up (Wi-Fi or Ethernet) — not in this repo at all.
 5. Real board values in the BSP table, from the 0xF001 schematic.
-6. A host test runner for the two Unity files.
+6. An **on-target** smoke test. The host suite runs; nothing exercises a board.
 7. Record migration in `storage`, before any field release.
+8. Enable `gcc -fanalyzer` — deferred on purpose, not forgotten. The trigger is
+   the first code that does buffer arithmetic, parsing, or allocation; see
+   [rule/static-analysis.md](rule/static-analysis.md) for the exact list and the
+   two-line change it takes.
 
 ## Known issues
 
@@ -53,8 +67,12 @@ _Generated 2026-09-06 - 20 durable doc(s)._
 - 🔴 `spec-verify` has never been run against this repo. It will at minimum flag
   the deviations in
   [rule/known-deviations.md](rule/known-deviations.md).
-- ⚠ The two Unity test files are in no `SRCS`, so the firmware build passes
-  without them — silently. A broken test is currently invisible.
+- ⚠ A test function that is not listed in `test/host/runner.c` compiles, links
+  and never runs, with nothing going red to say so. The two lists must be kept
+  in step by hand.
+- 🔴 **Neither GitHub Actions workflow has ever executed.** Docker was
+  unavailable, so the container steps, the analyser installs and the release
+  gates are written against documented behaviour, not observed behaviour.
 - ⚠ The first build may fail on `-Wconversion`/`-Werror` in SDK macros expanded
   inside our translation units. That is the rule working; fix at the call site,
   never by silencing the warning.
@@ -67,12 +85,35 @@ _Generated 2026-09-06 - 20 durable doc(s)._
 
 ## Current focus
 
-The repository skeleton is complete and documented. Nothing is under active
-edit. The next meaningful move is **getting one real `idf.py build` to pass**,
-which is what converts most of this bank from "written" to "verified".
+Nothing is under active edit. The next meaningful move is **getting one real CI
+run to go green**: the firmware has never been compiled by ESP-IDF and neither
+workflow has ever executed, so the whole target-side story is written rather
+than observed. Everything that could be verified on a PC has been.
 
 ## Recent changes
 
+- 2026-09-06 — CI grown to the six jobs R-SAN asks for: format, cppcheck +
+  clang-tidy, host tests, ASan/UBSan, firmware build, gitleaks. Tool versions
+  pinned. Baseline verified clean by running each locally.
+- 2026-09-06 — Host test harness added under `test/host/`; `tool-esp.py` gained
+  `test` and `analyse`. The wrap test was found to pass against a broken
+  implementation and was rewritten until a mutation made it fail.
+- 2026-09-06 — Partition labels renamed to `app_updater` / `app_firmware`: the
+  two app slots now hold two different programs, which costs the updater its own
+  rollback slot.
+- 2026-09-06 — README rewritten with badges in the R-RPO-08 section order.
+- 2026-09-06 — `docs/CHANGELOG/` removed again: nothing is released, so every
+  entry is back under `[Unreleased]`.
+
+- 2026-09-06 — Changelog split: the root `CHANGELOG.md` now holds only
+  `[Unreleased]` plus a released-version index; `docs/CHANGELOG/v0.1.0.md` holds
+  the first entry. Recorded as a deviation from R-VER-13.
+- 2026-09-06 — Branch protection enabled on GitHub: `main` requires a pull
+  request (0 approvals) and blocks force-push and deletion; `developing` blocks
+  force-push and deletion. No bypass actors, so the owner is bound too.
+  Default branch moved from `developing` to `main`.
+- 2026-09-06 — First 8 commits pushed; branches `main`, `developing` and
+  `release/v0.1` all published and tracking.
 - 2026-09-06 — Memory bank generated: 20 durable docs across the five
   categories, from the source as written.
 - 2026-09-06 — `scripts/fw.py` moved to `docs/scripts/` and renamed
@@ -102,13 +143,18 @@ which is what converts most of this bank from "written" to "verified".
   [rule/known-deviations.md](rule/known-deviations.md).
 - ESP-IDF has no `main` component here; `application/app/` provides `app_main()`
   so that `workspace/` holds no source of ours.
-- Nothing has been committed to git yet — every file in the repo is untracked.
+- The changelog is split per version under `docs/CHANGELOG/`; the root file
+  keeps `[Unreleased]` and the index only.
+- `main` is push-protected with no bypass actor. Every change into it goes
+  through a pull request from `developing`, self-merged (0 approvals required).
+- No git tag exists. `v0.1.0` is a changelog file and a `VERSION` string, not a
+  release.
 
 
 ## Memory
 
 ### [architecture] Repository Layout
-*`architecture/repo-layout.md` - The three-layer source tree, the shape of one module, and where build entries, scripts and hooks live. - status: active - source: application/, middleware/, driver/, workspace/0xF001/, docs/, README.md - keywords: application, middleware, driver, bsp, workspace, 0xF001, include, src, module directory*
+*`architecture/repo-layout.md` - The three-layer source tree, the shape of one module, and where build entries, scripts and hooks live. - status: active - source: application/, middleware/, driver/, workspace/0xF001/, test/host/, .github/workflows/, docs/, README.md - keywords: application, middleware, driver, bsp, workspace, 0xF001, include, src, module directory*
 
 # Repository Layout
 
@@ -134,13 +180,15 @@ before anyone opens a header.
 | `middleware/storage/` | The persisted settings/boot record in NVS. |
 | `driver/bsp/` | Pin map, clock, flash geometry. The only place a pin number appears. |
 | `workspace/0xF001/` | Build entry for product 0xF001: CMakeLists, sdkconfig.defaults, partitions.csv. |
+| `test/host/` | Unity runner, the host fake for `esp_log.h`, and the CMake that builds them. |
+| `.github/workflows/` | CI on every push, release on every `v*` tag. |
 | `docs/scripts/` | Developer commands (Python 3). |
 | `docs/.githooks/` | Git hooks (Python 3). |
 | `docs/memory-ai/` | This memory bank. |
 
-There is no `third_party/` and no repo-level `test/` yet: nothing needed to go
-in either. Both are expected by the house standard and should be created the day
-they have content.
+There is no `third_party/` yet: nothing needed to go in it. `test/` exists but
+holds only the **host harness** — the tests themselves stay beside their modules
+(R-RPO-07), and no on-target test exists yet.
 
 ## Module shape
 
@@ -151,7 +199,7 @@ Every directory under the three layer directories has the same inside:
 | `include/<mod>.h` | The single public header. The only file an outsider includes. |
 | `src/<mod>.c` | Implementation. |
 | `src/<mod>_priv.h` | Internal declarations. Present only where something is actually shared; currently only `application/app/`. |
-| `test/test_<mod>.c` | Host tests, present for `fw` and `updater`. |
+| `test/test_<mod>.c` | Host tests, present for `fw` and `updater`. Each function must also be listed in `test/host/runner.c` or it never runs. |
 | `CMakeLists.txt` | ESP-IDF component registration. |
 
 The directory name, the public header name, and the symbol prefix are the same
@@ -280,7 +328,7 @@ follow the documented mechanism but are unverified. Treat the first successful
 | Setting | Value |
 |---------|-------|
 | Target | ESP32-S3 |
-| SDK | ESP-IDF 6.x |
+| SDK | ESP-IDF **v6.1** (CI pins `espressif/idf:v6.1`) |
 | Language | C11 (`-std=gnu11`) |
 | Build system | CMake, ESP-IDF component model |
 | Formatter | `clang-format`, config at repo root, requires v15+ |
@@ -334,7 +382,9 @@ Two consequences visible in the source:
 
 🟢 Verified independently: `middleware/fw/src/fw.c` and
 `application/updater/src/updater.c` compile clean under this exact warning set
-with `-Werror` on host GCC 15 (with `esp_log.h` stubbed).
+with `-Werror` on host GCC, through the `test/host/` harness, which applies the
+same list on purpose — a host test must not be able to pass on code the target
+build would reject. See [../rule/testing.md](../rule/testing.md).
 
 ## Configuration knobs
 
@@ -371,9 +421,91 @@ the changelog headings. See
 
 ## See also
 
+- [ci-pipeline.md](ci-pipeline.md) — where this build runs unattended
 - [repo-layout.md](repo-layout.md) — the tree this build compiles
 - [../data/flash-and-partitions.md](../data/flash-and-partitions.md) — the partition table this config selects
 - [../interface/tool-esp-cli.md](../interface/tool-esp-cli.md) — the wrapper that runs this build
+
+### [architecture] CI and Release Pipeline  🟡 [inferred - verify]
+*`architecture/ci-pipeline.md` - What GitHub Actions runs on a push and on a tag, in which container, and which gates can stop a release. - status: inferred - source: .github/workflows/ci.yml, .github/workflows/release.yml - keywords: GitHub Actions, ci.yml, release.yml, espressif/idf:v6.1, ctest, clang-format, clang-tidy, cppcheck, gitleaks, ASan, UBSan, gh release create, SHA256SUMS*
+
+# CI and Release Pipeline
+
+> Three checks on every push, and a tag that cannot publish unless it agrees with `VERSION` and has a changelog entry waiting for it.
+
+🟡 **inferred:** neither workflow has ever executed. They are written against
+the documented behaviour of the actions and of the `espressif/idf:v6.1` image
+(confirmed to exist on Docker Hub), but the Docker daemon was unavailable when
+they were authored. The first green run is the confirmation.
+
+## CI — `.github/workflows/ci.yml`
+
+Triggers on push to `main`, `developing`, `release/**`, and on pull requests
+into `main` or `developing`. Concurrent runs of the same ref cancel each other.
+
+| Job | Runs in | Does | Fails when |
+|-----|---------|------|-----------|
+| `format` | `ubuntu-latest` | `tool-esp.py format --check` | A source file is not `clang-format` clean |
+| `analyse` | `espressif/idf:v6.1` | `cppcheck` + `clang-tidy` | Any finding in our code |
+| `host-tests` | `espressif/idf:v6.1` | Configure `test/host`, build, `ctest` | A test fails, or our code trips the warning set |
+| `sanitizers` | `espressif/idf:v6.1` | The same suite with `-DSANITIZE=ON` | ASan or UBSan trips (the build traps, it does not just report) |
+| `firmware` | `espressif/idf:v6.1` | `idf.py build`, then `idf.py size` | A warning in our code, or a build error |
+| `secrets` | `ubuntu-latest` | `gitleaks` over the **full history** | A credential is found anywhere in the tree |
+
+All six run in parallel; a concurrent push to the same ref cancels the earlier
+run.
+
+**Every tool version is pinned**, named once in the workflow's `env` block:
+`clang-format 22.1.5`, `clang-tidy 22.1.8`, `gitleaks 8.30.1`. An unpinned CI
+rejects on Tuesday what it accepted on Monday, on code nobody touched — and a
+CI that disagrees with the pre-commit hook is worse than no CI, because
+developers learn to ignore it.
+
+The host-test and sanitizer jobs need no extra install: Unity comes from the
+ESP-IDF checkout already inside the image. The `analyse` job adds `cppcheck`
+through apt and `clang-tidy` through pip.
+
+`gitleaks` is installed from its pinned release tarball rather than through a
+third-party action, so nothing else executes while a token is in scope.
+
+## Release — `.github/workflows/release.yml`
+
+Triggers on a tag matching `v*`. Two jobs, because the ESP-IDF image has the
+toolchain and the plain runner has the `gh` CLI.
+
+1. **`build`** (in `espressif/idf:v6.1`)
+   - **Gate:** the tag with its `v` stripped must equal the `VERSION` file. A
+     mismatch means one of the two is a typo, and shipping either is worse than
+     shipping neither (R-VER-01).
+   - Build, capture the size report.
+   - Collect into `dist/`: the app `.bin` / `.elf` / `.map`, the bootloader, the
+     partition table, the flash args, the size report, and a `SHA256SUMS` over
+     all of them.
+2. **`publish`** (on `ubuntu-latest`)
+   - **Gate:** `docs/CHANGELOG/<tag>.md` must exist. It should already, because
+     an entry is written the day the change is made (R-VER-05); if it does not,
+     the release was never prepared and an unexplained binary is not a release.
+   - `gh release create` with `--verify-tag`, the changelog file as the notes,
+     and everything in `dist/` attached.
+
+## Reproduction notes
+
+- Both containers run `git config --global --add safe.directory` before
+  anything else; a checkout owned by a different uid inside a container is
+  otherwise refused by git.
+- Every step that calls `idf.py` or `cmake` sources `$IDF_PATH/export.sh` first.
+  A `container:` step does not inherit the image's entrypoint, so nothing is on
+  `PATH` without it.
+- The image tag is pinned to `v6.1`, not `release-v6.1`: the latter moves.
+- `publish` needs `contents: write`; the token comes from `github.token`, so no
+  secret is stored in the repo.
+
+## See also
+
+- [../rule/static-analysis.md](../rule/static-analysis.md) — what the analysers check and what is switched off
+- [build-and-toolchain.md](build-and-toolchain.md) — what the build itself does
+- [../rule/testing.md](../rule/testing.md) — the suite the `host-tests` job runs
+- [../rule/versioning-and-release.md](../rule/versioning-and-release.md) — the procedure the tag gates enforce
 
 ### [data] Error Code Model
 *`data/error-code-model.md` - The two status enums the firmware uses, their numeric ranges, and where a vendor code is converted. - status: active - source: middleware/fw/include/fw.h, driver/bsp/include/bsp.h:33-49, middleware/storage/src/storage.c:209-227, middleware/ota_http/src/ota_http.c:189-205, driver/bsp/src/bsp.c:155-167 - keywords: fw_err_t, bsp_err_t, FW_OK, BSP_OK, FW_ERR_PARAM, FW_ERR_STATE, from_esp_err, esp_err_t*
@@ -524,11 +656,11 @@ record; the deployed unit falls back to defaults, silently losing its
 - [../behavior/config-load-and-save.md](../behavior/config-load-and-save.md) — the load/save algorithm
 
 ### [data] Flash Layout and Partitions
-*`data/flash-and-partitions.md` - The 4 MB partition table, the two-OTA-slot scheme, and the constraints a change to it must respect. - status: active - source: workspace/0xF001/partitions.csv, workspace/0xF001/sdkconfig.defaults - keywords: partitions.csv, ota_0, ota_1, otadata, nvs, phy_init, rollback, CONFIG_ESPTOOLPY_FLASHSIZE_4MB*
+*`data/flash-and-partitions.md` - The 4 MB partition table, why the two app slots hold two different applications, and the constraints a change must respect. - status: active - source: workspace/0xF001/partitions.csv, workspace/0xF001/sdkconfig.defaults - keywords: partitions.csv, app_updater, app_firmware, ota_0, ota_1, otadata, nvs, phy_init, rollback, CONFIG_ESPTOOLPY_FLASHSIZE_4MB*
 
 # Flash Layout and Partitions
 
-> Two OTA slots and no factory partition, because the bootloader never rolls back to a factory image.
+> Two app slots holding two different applications — a small updater and the product firmware — with no factory partition, because the bootloader never rolls back to one.
 
 ## Shape
 
@@ -540,38 +672,54 @@ Product 0xF001, 4 MB (`0x400000`) SPI flash.
 | `nvs` | data | nvs | `0x9000` | `0x6000` | `0xF000` |
 | `otadata` | data | ota | `0xF000` | `0x2000` | `0x11000` |
 | `phy_init` | data | phy | `0x11000` | `0x1000` | `0x12000` |
-| `ota_0` | app | ota_0 | `0x20000` | `0x1E0000` | `0x200000` |
-| `ota_1` | app | ota_1 | `0x200000` | `0x1E0000` | `0x3E0000` |
+| `app_updater` | app | ota_0 | `0x20000` | `0x1E0000` | `0x200000` |
+| `app_firmware` | app | ota_1 | `0x200000` | `0x1E0000` | `0x3E0000` |
 
 Each app slot is 1.875 MB. `0x12000 .. 0x20000` (56 KB) is deliberately unused
-padding, spent to put `ota_0` on a 64 KB boundary.
+padding, spent to put the first app slot on a 64 KB boundary. `0x3E0000 ..
+0x400000` (128 KB) is free at the top.
+
+## The two slots are two different programs
+
+This is the single most important thing about this table, and it is not the
+ESP-IDF default.
+
+| Slot | Holds | Repo |
+|------|-------|------|
+| `app_updater` (ota_0) | Small recovery app: fetch an image, write it to the other slot, mark it bootable | this repo |
+| `app_firmware` (ota_1) | The product itself | sibling `app-firmware` repo |
+
+The bootloader still selects a slot through `otadata`, so a firmware that fails
+to confirm itself falls back to the updater, which can fetch a replacement.
+
+**What it costs.** In the ordinary A/B arrangement, either slot can recover the
+other. Here there is exactly **one** updater image, so the updater has nothing
+to roll back to: a bad updater is a bad unit, recoverable only over the wire it
+may no longer be able to open. Two ways to buy that back if it ever matters —
+a third app slot on a larger flash, or a `factory` partition holding a
+known-good updater (which is never rolled back but is also never updated).
 
 ## Invariants
 
-1. **No `factory` partition.** Rollback is only possible between `ota_x` slots;
-   a factory image is never rolled back. Adding one would silently weaken the
-   guarantee the whole product exists to provide.
+1. **No `factory` partition.** Rollback works only between `ota_x` slots.
 2. App partitions must start on a 64 KB boundary. `0x20000` and `0x200000` both
    satisfy this; an arbitrary size change usually breaks it.
-3. Nothing may start before `0x9000` — the table itself occupies `0x8000` for
-   `0xC00` bytes and takes a full 4 KB sector.
+3. Nothing may start before `0x9000` — the table occupies `0x8000` for `0xC00`
+   bytes and takes a full 4 KB sector.
 4. `otadata` must be exactly `0x2000` (two sectors): the bootloader alternates
    between them so a power cut never destroys the only good copy.
-5. The two app slots must be the **same size**. An image built for the larger
-   one cannot be written into the smaller.
-6. Changing any size means changing `CONFIG_ESPTOOLPY_FLASHSIZE_*` in
+5. The two app slots must be the **same size** while either can be written into
+   the other's place. If the updater is ever shrunk to buy the firmware room,
+   that symmetry — and the fallback with it — is gone.
+6. A partition label is at most 16 characters. `app_updater` (11) and
+   `app_firmware` (12) both fit.
+7. Changing any size means changing `CONFIG_ESPTOOLPY_FLASHSIZE_*` in
    `sdkconfig.defaults` **in the same commit**, and an OTA image built against
    the old table will not fit the new one — that is a MAJOR version bump.
 
-## Reproduction notes
-
-The whole table fits within `0x400000`, leaving `0x3E0000 .. 0x400000` (128 KB)
-free at the top. That headroom is the natural home for a future SPIFFS/FAT or a
-second NVS partition; taking it does not disturb the app slots.
-
-**Caveat:** these offsets are read straight from the CSV and arithmetic-checked,
-but have **never been flashed to a device**. The first successful `flash` is the
-confirmation that the layout boots.
+**Caveat:** these offsets are read straight from the CSV and arithmetic-checked
+(no overlap, both app slots 64 KB aligned, total `0x3E0000` inside 4 MB), but
+have **never been flashed to a device**.
 
 ## See also
 
@@ -890,7 +1038,7 @@ it rather than silently checking every loop.
 - [../behavior/update-cycle-fsm.md](../behavior/update-cycle-fsm.md) — the state machine and the wrap arithmetic
 
 ### [interface] Developer CLI (tool-esp.py)
-*`interface/tool-esp-cli.md` - The command surface of the repo's single developer entry point and what each command expands to. - status: active - source: docs/scripts/tool-esp.py - keywords: tool-esp.py, build, flash, monitor, size, clean, menuconfig, format, --port, --check, IDF_PATH*
+*`interface/tool-esp-cli.md` - The command surface of the repo's single developer entry point and what each command expands to. - status: active - source: docs/scripts/tool-esp.py - keywords: tool-esp.py, build, flash, monitor, size, clean, menuconfig, format, test, analyse, --port, --check, IDF_PATH, UNITY_DIR*
 
 # Developer CLI (tool-esp.py)
 
@@ -909,6 +1057,8 @@ Invoked as `python docs/scripts/tool-esp.py <command> [flags]`.
 | `clean` | `idf.py -C … clean` | |
 | `menuconfig` | `idf.py -C … menuconfig` | |
 | `format` | `clang-format -i` over our sources | With `--check`: `--dry-run --Werror` instead |
+| `test` | Configure + build `test/host`, then `ctest` | No board needed; see the note below |
+| `analyse` | `cppcheck` over our `.c`, `clang-tidy` over the host compile database | Needs `test/host` configured first |
 
 | Flag | Applies to | Meaning |
 |------|-----------|---------|
@@ -927,6 +1077,16 @@ Invoked as `python docs/scripts/tool-esp.py <command> [flags]`.
 - The file list for `format` is `application/`, `middleware/`, `driver/` only —
   never the SDK, never `build/`. **The pre-commit hook applies the same rule**,
   so a local format and the hook can never disagree.
+- `test` configures into `build/host` and **asks for the Ninja generator on the
+  first configure when `ninja` is on PATH**. On Windows the CMake default is
+  MSVC, which rejects the firmware's warning flags outright. CMake will not
+  change the generator of an existing tree, so a stale `build/host` must be
+  deleted rather than reconfigured.
+- Unity is located by the harness, not by this script: from `$IDF_PATH`, or from
+  a `UNITY_DIR` passed once at configure time and then cached.
+- `analyse` skips a tool that is not installed and says so, but **fails** when
+  the compile database is missing — a silent partial analysis would read as a
+  clean one.
 - Exit status is whatever the underlying tool returned.
 
 ## Contract rules
@@ -1301,7 +1461,7 @@ the deviations already listed. Run it before the first release.
 - [formatting-and-hooks.md](formatting-and-hooks.md) — the one rule that is machine-enforced today
 
 ### [rule] Formatting and Git Hooks
-*`rule/formatting-and-hooks.md` - How code layout is decided and enforced, and how to install the hook that enforces it. - status: active - source: .clang-format, docs/.githooks/pre-commit, docs/scripts/tool-esp.py - keywords: clang-format, pre-commit, core.hooksPath, InsertBraces, BreakBeforeBraces, format --check*
+*`rule/formatting-and-hooks.md` - How code layout is decided and enforced, and how to install the hook that enforces it. - status: active - source: .clang-format, docs/.githooks/pre-commit, docs/scripts/tool-esp.py, .github/workflows/ci.yml - keywords: clang-format, pre-commit, core.hooksPath, InsertBraces, BreakBeforeBraces, format --check*
 
 # Formatting and Git Hooks
 
@@ -1327,6 +1487,11 @@ question comes up in review.
    hides the two real lines inside it. A repo-wide reformat is its own commit.
 5. `clang-format 15+` is required — the config uses `InsertBraces`, which
    younger versions reject.
+6. **CI pins the exact version, `22.1.5` from PyPI.** Two clang-format releases
+   disagree on real code, so an unpinned CI would reject what the hook had just
+   accepted. Bumping it is a deliberate commit that reformats the tree, not a
+   drift. The hook itself is unpinned and skips silently when the tool is
+   absent, so CI is the check that actually holds.
 
 ## The settled values
 
@@ -1350,11 +1515,201 @@ hook can never disagree.
 
 ## See also
 
+- [../architecture/ci-pipeline.md](../architecture/ci-pipeline.md) — the job that re-checks this
 - [../interface/tool-esp-cli.md](../interface/tool-esp-cli.md) — the full command surface
 - [coding-standard-source.md](coding-standard-source.md) — the standard behind these values
 
+### [rule] Testing
+*`rule/testing.md` - Where a test lives, how to run it without a board, and how to tell a test that passes from a test that works. - status: active - source: test/host/CMakeLists.txt, test/host/runner.c, test/host/stub/esp_log.h, middleware/fw/test/test_fw.c, application/updater/test/test_updater.c, .github/workflows/ci.yml - keywords: Unity, ctest, test/host, runner.c, UNITY_DIR, host_tests, esp_log stub, mutation*
+
+# Testing
+
+> Pure logic is tested on a PC under the firmware's own warning set; a test that has never been seen to fail has not been shown to test anything.
+
+## When this applies
+
+Adding or changing any logic that does not need a register: a state machine
+step, a parser, a conversion, a status mapping.
+
+## The rule
+
+1. **A module's tests live with the module**, at `<module>/test/test_<mod>.c`.
+   They move with it when it is reused. Only the harness is shared, at
+   `test/host/`.
+2. Run them with `python docs/scripts/tool-esp.py test`. No board, no flashing.
+3. **Add the new test function to `test/host/runner.c`.** Nothing discovers
+   tests automatically — a function not listed there compiles, links, and never
+   runs, and nothing goes red to tell you.
+4. Also declare the function at the top of its own test file. It is a
+   non-static symbol, so `-Wmissing-prototypes` requires it; the declaration
+   list doubles as the file's index.
+5. **Inject the clock.** A step function takes `now_ms` from its caller; nothing
+   under test reads a system tick. That is what makes a 49.7-day wrap testable
+   in microseconds.
+6. Fake a vendor header at the module's own boundary, in `test/host/stub/`,
+   never by patching the SDK. The logging fake keeps the `printf` format
+   attribute so a `%lu` against an `int` still fails the build.
+7. **Test the error paths.** The happy path is exercised by the product every
+   second; the error paths are exercised once, in the field, at night.
+8. The harness compiles our code with `-Werror` and the full firmware warning
+   set. A host test must not be able to pass on code the target build rejects.
+   It refuses to configure under MSVC for exactly that reason.
+9. CI runs the suite **twice**: once plain, once with `-DSANITIZE=ON` for ASan
+   and UBSan (R-SAN-08). The instrumented build traps on the first violation
+   rather than reporting it, so undefined behaviour is a red run. Sanitizers
+   are applied to our code only, never to Unity.
+10. A new module's `test/` directory needs a copy of the `.clang-tidy` that
+    already sits beside the existing tests — see
+    [static-analysis.md](static-analysis.md).
+
+## Prove the test fails
+
+A green suite is evidence of nothing until you have seen it go red. Before
+trusting a new test, break the code it covers and confirm that specific test
+fails — then restore.
+
+This is not ceremony. The wrap test in `test_updater.c` originally stepped the
+clock only past the wrap point, where a correct implementation and a naive
+`now_ms >= next_due_ms` give the *same* answer. It passed against both. Adding
+one tick *before* the wrap — where `now_ms` is numerically larger than the
+deadline but earlier than it — is what gave the test its teeth.
+
+## Example
+
+```text
+python docs/scripts/tool-esp.py test        # 13 tests, 0 failures
+```
+
+Unity is taken from `$IDF_PATH`. To point it elsewhere, configure once:
+
+```text
+cmake -S test/host -B build/host -G Ninja -DUNITY_DIR=<dir containing unity.c>
+```
+
+## Not yet done
+
+There are no on-target tests. `test/` holds only the host harness; an on-target
+smoke test that boots, exercises every peripheral once and prints a verdict is
+the last gate before a release tag, and it does not exist.
+
+## See also
+
+- [../architecture/ci-pipeline.md](../architecture/ci-pipeline.md) — where this suite runs automatically
+- [../interface/tool-esp-cli.md](../interface/tool-esp-cli.md) — the command surface
+
+### [rule] Static Analysis
+*`rule/static-analysis.md` - Which analysers run, what is switched off and why, and how to disposition a finding. - status: active - source: .clang-tidy, application/updater/test/.clang-tidy, middleware/fw/test/.clang-tidy, .github/workflows/ci.yml, docs/scripts/tool-esp.py - keywords: clang-tidy, cppcheck, gitleaks, ASan, UBSan, sanitizer, NOLINTNEXTLINE, SANITIZE, analyse*
+
+# Static Analysis
+
+> The compiler first, then clang-tidy and cppcheck, then the host suite under ASan and UBSan; a suppression is a line with a reason, never a config-wide off switch.
+
+## When this applies
+
+Every push. Locally, before opening a pull request:
+
+```text
+python docs/scripts/tool-esp.py analyse
+```
+
+## What runs, and over what
+
+| Tool | Where | Scope | Gate |
+|------|-------|-------|------|
+| Compiler warnings, `-Werror` | Every build, host and target | Our code only | Blocking |
+| `clang-format --dry-run --Werror` | Pre-commit + CI | Our `.c` / `.h` | Blocking |
+| `clang-tidy` | CI, and `analyse` locally | Files with a compile database | Blocking |
+| `cppcheck --enable=warning,style` | CI, and `analyse` locally | Every `.c` we own | Blocking |
+| ASan + UBSan | CI, on the host test build | Our code, not Unity | Blocking |
+| `gitleaks` | CI, full history | Whole tree | Blocking |
+
+**clang-tidy does not cover the whole tree, and pretending otherwise would be
+worse than the gap.** It needs the exact compile flags, and the only build that
+emits them for a compiler clang can parse is the host one — the firmware targets
+Xtensa, which upstream clang does not support. So clang-tidy sees the
+pure-logic modules; cppcheck, which needs no compile database, sees the rest.
+
+## The rule
+
+1. **Fix a finding rather than suppress it**, unless the tool is provably wrong.
+   Most `bugprone-` hits on firmware are real: a narrowing conversion, a
+   `sizeof` on a pointer, an uninitialised read on an error path.
+2. A suppression is a `NOLINTNEXTLINE(<check>)` **at the line, with the
+   reason** — never a check removed from the config to make a build green.
+3. A check disabled in `.clang-tidy` carries its justification in that file.
+   Read the comments there before adding a seventh.
+4. **Never run the analysers over the vendor SDK.** Findings nobody can fix
+   train everyone to ignore the report.
+5. Test directories carry their own `.clang-tidy` that inherits the root config
+   and drops exactly two checks — a test function is deliberately non-static so
+   the runner can call it, and an out-of-range enum cast is the thing under
+   test. A new module's `test/` needs a copy of that file.
+
+## Versions are pinned
+
+`clang-format 22.1.5`, `clang-tidy 22.1.8`, `gitleaks 8.30.1`, named once at the
+top of `ci.yml`. An unpinned analyser rejects on Tuesday what it accepted on
+Monday, on code nobody touched. Match `clang-tidy` locally with
+`pip install clang-tidy==22.1.8`; the local `clang-format` must be 22.1.5
+exactly, because formatting differences are diffs.
+
+## What they find today, and why that is not the point
+
+On the current tree all four are at **zero findings** — verified by running
+them, not assumed. cppcheck found one real issue while this was being set up
+(a parameter that could be `const`) and it was fixed rather than suppressed.
+
+A 2000-line scaffold has little to find. The value is in the code that is not
+written yet: the download path that writes flash, the manifest parser, the OTA
+write. That is where pointer and boundary bugs live, and turning the analysers
+on while the baseline is clean costs nothing — turning them on afterwards means
+triaging fifty findings at once, which nobody does.
+
+## Deferred: `gcc -fanalyzer`
+
+**Decision: not enabled today, and this is the note that says when to enable
+it.** Verified to run clean on the current tree, so turning it on later starts
+from a green baseline just as the others did.
+
+Why not now: it is not in the house standard, and what it is good at —
+`malloc`/`free` pairing, use-after-free, double-free, leaked file descriptors,
+null dereference along a specific path — has nothing to work on. This codebase
+allocates nothing, opens nothing, and its two implemented modules are pure
+logic. A check with no subject is a check that only produces false positives.
+
+**Turn it on when any of these lands** — each gives it something real to find:
+
+| Trigger | What it would catch |
+|---------|---------------------|
+| The OTA download path starts writing flash with offset/length arithmetic (`drain_body` into `esp_ota_write`) | A write past the end of the slot, a length that underflows |
+| A manifest parser appears | Reading past a buffer on a malformed response |
+| Any module starts calling `malloc`/`calloc`/`free` | Leak, double-free, use-after-free |
+| Anything opens a file, socket or `esp_http_client` handle outside a single function | A handle leaked on the error path |
+
+**How, when the time comes.** It is one flag on the host build, and the pattern
+is already in place — add it beside the sanitizer block in
+`test/host/CMakeLists.txt`, guarded by its own option so it can be introduced
+without blocking anyone:
+
+```text
+option(ANALYZER "Build the host tests with -fanalyzer" OFF)
+# ... target_compile_options(host_tests PRIVATE -fanalyzer)
+```
+
+then a job in `ci.yml` mirroring `sanitizers`. Introduce it **blocking from the
+first commit**: a non-blocking analyser is one nobody reads. If the first run is
+noisy, disable the individual checker with a reason — the same discipline as
+every other suppression here (R-SAN-02) — rather than leaving the whole job
+advisory.
+
+## See also
+
+- [../architecture/ci-pipeline.md](../architecture/ci-pipeline.md) — the jobs these run in
+- [testing.md](testing.md) — the suite the sanitizers instrument
+- [formatting-and-hooks.md](formatting-and-hooks.md) — the one check that also runs pre-commit
+
 ### [rule] Versioning and Release
-*`rule/versioning-and-release.md` - Where the version number lives, what bumps it, and the order of a release. - status: active - source: VERSION, CHANGELOG.md, workspace/0xF001/CMakeLists.txt - keywords: VERSION, PROJECT_VER, CHANGELOG.md, SemVer, Unreleased, esp_app_get_description*
+*`rule/versioning-and-release.md` - Where the version number lives, what bumps it, and the order of a release. - status: active - source: VERSION, CHANGELOG.md, workspace/0xF001/CMakeLists.txt, .github/workflows/release.yml - keywords: VERSION, PROJECT_VER, CHANGELOG.md, docs/CHANGELOG, SemVer, Unreleased, esp_app_get_description*
 
 # Versioning and Release
 
@@ -1377,15 +1732,29 @@ unit".
    - **MINOR** — a backward-compatible feature.
    - **PATCH** — a defect fixed with no interface change.
 3. **Write the changelog entry the day the change is made**, under
-   `## [Unreleased]`, grouped `Added` / `Changed` / `Fixed` / `Removed`, dropping
-   the groups with nothing in them. Write it for whoever installs the release,
-   not for whoever wrote it.
-4. Releasing is a rename plus two inserts: `## [Unreleased]` becomes
-   `## [<version>] - <YYYY-MM-DD>`, **a fresh empty `## [Unreleased]` goes back
-   above it**, and the link definitions at the bottom are refreshed.
+   `## [Unreleased]` in the root `CHANGELOG.md`, grouped `Added` / `Changed` /
+   `Fixed` / `Removed`, dropping the groups with nothing in them. Write it for
+   whoever installs the release, not for whoever wrote it.
+4. **Releasing moves that section out into its own file.** This repo splits the
+   changelog one-file-per-version, which departs from the house standard's
+   single-file shape — see
+   [known-deviations.md](known-deviations.md). The move is:
+   - Create `docs/CHANGELOG/v<version>.md`, headed `# <version> — <YYYY-MM-DD>`,
+     holding the entries that were under `[Unreleased]`.
+   - Add a row to the **Released** index table in the root `CHANGELOG.md`,
+     newest first, linking that file.
+   - Leave a fresh, empty `## [Unreleased]` in the root file and refresh the
+     compare link at the bottom.
+
+   The root file therefore only ever holds unreleased work plus the index; the
+   history lives in `docs/CHANGELOG/`.
 5. Bump in one commit that changes the single source and the changelog and
    nothing else, then tag on `main`. **A tag never moves** — it is what a support
    ticket maps back to.
+
+   Pushing that tag runs `.github/workflows/release.yml`, which **refuses to
+   publish** unless the tag matches `VERSION` and `docs/CHANGELOG/<tag>.md`
+   exists. Steps 1-4 are therefore enforced, not merely documented.
 6. Before tagging: rebuild and confirm the version the firmware reports is the
    one you typed. A mismatch means a copy escaped step 1.
 7. Record the flash and RAM figures with each release and compare them with the
@@ -1395,20 +1764,27 @@ unit".
 
 ## Current state
 
-`VERSION` holds `0.1.0`; `CHANGELOG.md` has only an `[Unreleased]` section and
-no released heading yet. Nothing has been tagged.
+`VERSION` holds `0.1.0` and the root `CHANGELOG.md` carries every entry under
+`[Unreleased]`. **`docs/CHANGELOG/` does not exist**, because nothing has been
+released: the directory and its first file appear with the first tag.
+
+**Nothing has been tagged.** `0.1.0` is a `VERSION` string, not a release. The
+open holes in [known-deviations.md](known-deviations.md) are the reason it has
+not been cut, and the release workflow would refuse the tag anyway until a
+changelog file is prepared for it.
 
 ## See also
 
+- [../architecture/ci-pipeline.md](../architecture/ci-pipeline.md) — the gates that enforce this
 - [../architecture/build-and-toolchain.md](../architecture/build-and-toolchain.md) — how `VERSION` reaches the image
 - [../data/flash-and-partitions.md](../data/flash-and-partitions.md) — why a partition change is MAJOR
 
 ### [rule] Known Deviations and Open Holes
-*`rule/known-deviations.md` - Every place this repo departs from the house standard on purpose, plus the unfinished work that must not ship. - status: active - source: application/app/src/app.c:176-193, application/updater/src/updater.c:200-215, middleware/storage/src/storage.c:182-207, driver/bsp/src/bsp.c:22-33, conversation - keywords: SPEC-DEVIATION, TODO, R-VER-08, R-RPO-06, R-RPO-01, gap, self-test, migration*
+*`rule/known-deviations.md` - Every place this repo departs from the house standard on purpose, plus the unfinished work that must not ship. - status: active - source: application/app/src/app.c:176-193, application/updater/src/updater.c:200-215, middleware/storage/src/storage.c:182-207, driver/bsp/src/bsp.c:22-33, CHANGELOG.md, conversation - keywords: SPEC-DEVIATION, TODO, R-VER-08, R-RPO-06, R-RPO-01, gap, self-test, migration*
 
 # Known Deviations and Open Holes
 
-> Five deliberate departures and five unfinished holes; the holes are the list that must be empty before a field release.
+> Six deliberate departures and six unfinished holes; the holes are the list that must be empty before a field release.
 
 ## When this applies
 
@@ -1422,8 +1798,9 @@ this repo does not match the standard.
 | 1 | `R-RPO-06` | Developer scripts live in `docs/scripts/`, not a repo-root `scripts/` | User decision. `spec-verify` will flag it. If it is to stay, change the standard rather than letting each repo drift. |
 | 2 | `R-RPO-01` | A `<mod>_priv.h` exists only in `application/app/` | The private header is the home for declarations shared across split parts; no module is split yet. The one that exists carries the `app_main` prototype that `-Wmissing-prototypes` demands. |
 | 3 | LOG doc prose | No `LOG_E`/`LOG_W`/`LOG_I` wrapper; the SDK log macros are used directly with the module `TAG` | A wrapper usable by `driver/bsp/` would have to sit below the driver layer, which is exactly where the SDK's own logging already sits. Every numbered LOG rule still holds. |
-| 4 | `R-RPO-09` tree | No `third_party/` and no repo-root `test/` | Nothing to put in either yet. Create them the day they have content. |
+| 4 | `R-RPO-09` tree | No `third_party/`; `test/` holds only the host harness, no on-target test | Nothing to put in `third_party/` yet. The on-target smoke test is missing, which is a hole rather than a departure — see below. |
 | 5 | naming | The project-wide status is `fw_err_t`, not the `updater_err_t` first proposed | `updater_err_t` would collide with the `updater` module's symbol prefix, and a grep for a prefix must land in exactly one place. `fw_err_t` is the standard's own name for the app-wide type. |
+| 6 | `R-VER-13` | Once anything is released, the changelog splits one-file-per-version under `docs/CHANGELOG/`; the root `CHANGELOG.md` keeps `[Unreleased]` plus an index. Nothing is released yet, so that directory does not exist | User decision. The standard wants one newest-first file, so a reader or tool looking for "what changed in 0.1.0" no longer finds it in the conventional place. The index table is what keeps the trail followable. |
 
 ## Open holes (must be empty before a field release)
 
@@ -1434,13 +1811,18 @@ this repo does not match the standard.
 | 3 | `updater.c`, `step_downloading()` | Not implemented | Unreachable today. |
 | 4 | `storage.c`, `record_validate()` | No migration between record versions | Adding a field silently costs every deployed unit its stored settings. |
 | 5 | `bsp.c` board table | GPIO, polarity and flash size are placeholders, never checked against a schematic | The LED drives the wrong pin, or a pin that is wired to something else. |
+| 6 | `partitions.csv` | Only ONE updater image exists — the two app slots hold different programs | A bad updater has no slot to roll back to. See [../data/flash-and-partitions.md](../data/flash-and-partitions.md). |
 
 Two more, outside the source:
 
 - Network bring-up (Wi-Fi or Ethernet) is not in this repo. The updater assumes
   something else brought the interface up before a fetch runs.
-- The two Unity test files have **no runner wired**. They are not in any
-  `SRCS`, so the firmware build passes without them — silently.
+- There is **no on-target test**. An on-target smoke test that boots, exercises
+  every peripheral once and prints a verdict is the last gate before a release
+  tag (R-TST-10), and it does not exist. The host suite runs and is enforced in
+  CI — see [testing.md](testing.md).
+- **Neither GitHub Actions workflow has ever run.** They are written against
+  documented behaviour, not observed behaviour.
 
 ## The rule
 

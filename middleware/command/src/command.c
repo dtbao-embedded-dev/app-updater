@@ -111,8 +111,8 @@ fw_err_t command_on_frame(command_t *cmd, const protocol_req_t *req) {
 
 /* Arguments are checked at the public boundary (R-SRC-06); helpers assume it. */
 
-/* One flat switch over the ten served opcodes rather than the two-level
- * range-then-item switch the source spec describes. At ten cases the extra
+/* One flat switch over the thirteen served opcodes rather than the two-level
+ * range-then-item switch the source spec describes. At thirteen cases the extra
  * level is ceremony: the compiler builds the same jump table either way, and a
  * reader looking up `0x0202` finds it in one place. */
 static protocol_status_t serve(command_t *cmd, const protocol_req_t *req, uint8_t *payload,
@@ -156,6 +156,18 @@ static protocol_status_t serve(command_t *cmd, const protocol_req_t *req, uint8_
 
         case PROTOCOL_CMD_UPG_END:
             return command_upgrade_end(cmd);
+
+        case PROTOCOL_CMD_DUMP_INFO:
+            return command_dump_info(payload, payload_len);
+
+        case PROTOCOL_CMD_DUMP_READ:
+            /* The one handler besides PING that answers with more bytes than
+             * the payload buffer above holds, so it points `echo` at its own
+             * staging buffer instead. */
+            return command_dump_read(cmd, req, payload_len, echo);
+
+        case PROTOCOL_CMD_DUMP_ERASE:
+            return command_dump_erase();
 
         default:
             /* Unreachable: the map already said this opcode is served, so a

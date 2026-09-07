@@ -106,6 +106,18 @@ typedef struct {
     command_cfg_t cfg;                 /**< Copy of the config.              */
     command_upgrade_t upgrade;         /**< The in-flight transfer, if any.  */
     uint8_t frame[PROTOCOL_MAX_FRAME]; /**< The response being built.        */
+
+    /* DUMP_READ's answer, staged here and pointed at rather than copied.
+     *
+     * It cannot go through the dispatcher's own payload buffer: that one is 32
+     * bytes on the stack of a task with a 4096-byte stack, so a 4 KB answer
+     * would overflow it either way. The frame builder copies once from
+     * wherever a handler points, so the only requirement is a home that
+     * outlives the handler - and PROTOCOL_DUMP_CHUNK_MAX is the reason the
+     * read chunk is a flash sector and not the upgrade band: 4 KB of .bss for
+     * a 64 KB dump read once in a unit's life, against 32 KB for the same job
+     * fourteen round-trips sooner. */
+    uint8_t chunk[PROTOCOL_DUMP_CHUNK_MAX];
 } command_t;
 
 /* ------------------------ Public function prototypes ------------------- */

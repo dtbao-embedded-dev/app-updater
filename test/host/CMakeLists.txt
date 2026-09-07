@@ -67,6 +67,7 @@ add_executable(host_tests
     "${REPO_ROOT}/middleware/protocol/src/protocol.c"
     "${REPO_ROOT}/middleware/protocol/test/test_protocol.c"
     "${REPO_ROOT}/middleware/command/src/command.c"
+    "${REPO_ROOT}/middleware/command/src/command_dump.c"
     "${REPO_ROOT}/middleware/command/src/command_upgrade.c"
     "${REPO_ROOT}/middleware/command/test/test_command.c"
     "${REPO_ROOT}/middleware/cfg/src/cfg.c"

@@ -14,6 +14,7 @@
 #include "protocol.h"
 
 #include "bsp_fake.h"
+#include "coredump_fake.h"
 #include "esp_rom_crc.h"
 #include "ota_fake.h"
 
@@ -32,6 +33,7 @@ static uint32_t s_restarts_when_replied;
 static bool s_busy;
 static uint8_t s_payload[PROTOCOL_MAX_DATA];
 static uint8_t s_image[8192];
+static uint8_t s_dump[COREDUMP_FAKE_MAX];
 
 /* --------------------- Private function prototypes --------------------- */
 
@@ -48,6 +50,8 @@ static fw_err_t send_begin(uint8_t target, uint32_t img_size, uint32_t img_crc32
                            uint32_t chunk_max);
 static fw_err_t send_write(uint32_t offset, const uint8_t *chunk, uint32_t chunk_len);
 static void fill_image(uint32_t size);
+static fw_err_t send_dump_read(uint32_t offset, uint32_t len);
+static void fill_dump(uint32_t size);
 
 /* ------------------------ Public function prototypes ------------------- */
 
@@ -68,6 +72,16 @@ void test_command_set_boot_slot_arms_the_slot_it_names(void);
 void test_command_set_boot_slot_refuses_a_slot_with_no_valid_image(void);
 void test_command_reads_both_burned_in_macs(void);
 void test_command_maps_a_mac_read_failure_to_hw(void);
+void test_command_dump_info_reports_an_absent_dump_as_an_answer(void);
+void test_command_dump_info_reports_a_corrupt_dump_and_still_reads_it(void);
+void test_command_dump_read_returns_the_stored_bytes(void);
+void test_command_dump_read_spans_more_than_one_chunk(void);
+void test_command_dump_read_refuses_a_length_outside_the_chunk_cap(void);
+void test_command_dump_read_refuses_a_range_past_the_stored_dump(void);
+void test_command_dump_read_refuses_when_no_dump_is_stored(void);
+void test_command_dump_erase_succeeds_with_nothing_to_erase(void);
+void test_command_dump_erase_clears_a_stored_dump(void);
+void test_command_dump_maps_a_driver_failure_to_hw(void);
 void test_command_rejects_null_arguments(void);
 void test_command_upgrade_refuses_a_chunk_size_outside_the_band(void);
 void test_command_upgrade_accepts_both_ends_of_the_chunk_band(void);
@@ -722,6 +736,7 @@ static void setup(void) {
 
     bsp_fake_reset();
     ota_fake_reset();
+    coredump_fake_reset();
     memset(&s_cmd, 0, sizeof(s_cmd));
     memset(s_reply, 0, sizeof(s_reply));
     memset(s_payload, 0, sizeof(s_payload));
@@ -777,6 +792,30 @@ static const uint8_t *reply_payload(void) {
     return &s_reply[PROTOCOL_PREFIX_LEN + PROTOCOL_STATUS_LEN];
 }
 
+/* Builds DUMP_READ's fixed 8-byte payload the way a host would. */
+static fw_err_t send_dump_read(uint32_t offset, uint32_t len) {
+    uint8_t body[PROTOCOL_DUMP_READ_LEN];
+
+    put_le32(&body[0], offset);
+    put_le32(&body[4], len);
+    return send(PROTOCOL_CMD_DUMP_READ, body, (uint32_t)sizeof(body));
+}
+
+/* A dump whose every byte is a function of its offset, so a wrong offset or a
+ * short read is visible in the content rather than only in the length.
+ *
+ * The `i >> 8` term is not decoration. `(i * 7) + 1` alone repeats with period
+ * 256 - gcd(7, 256) is 1 - so every offset that is a multiple of 256 produces
+ * an identical run, and a handler that ignored the offset entirely would still
+ * compare equal at 1024 and 4096. Mutation caught exactly that: reading from 0
+ * instead of `offset` left these assertions green. Folding the high byte in
+ * makes the pattern unique across the whole buffer. */
+static void fill_dump(uint32_t size) {
+    for (uint32_t i = 0U; i < size; ++i) {
+        s_dump[i] = (uint8_t)((i * 7U) + (i >> 8U) + 1U);
+    }
+}
+
 /* Builds UPG_BEGIN's 13-byte payload the way a host would. */
 static fw_err_t send_begin(uint8_t target, uint32_t img_size, uint32_t img_crc32,
                            uint32_t chunk_max) {
@@ -805,6 +844,181 @@ static void fill_image(uint32_t size) {
     for (uint32_t i = 0; i < size; ++i) {
         s_image[i] = (uint8_t)((i * 31U) & 0xFFU);
     }
+}
+
+/* ---------------------------- Core dump 0x07 --------------------------- */
+
+/* "Nothing ever panicked here" is an answer, not a failure - the same doctrine
+ * as an unset version in VERSION. A host that got -5 here could not tell a
+ * healthy unit from a broken command. */
+void test_command_dump_info_reports_an_absent_dump_as_an_answer(void) {
+    setup();
+
+    TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_DUMP_INFO, NULL, 0U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+    TEST_ASSERT_EQUAL_UINT32(PROTOCOL_DUMP_INFO_RSP_LEN, reply_payload_len());
+    TEST_ASSERT_EQUAL_UINT8(PROTOCOL_DUMP_ABSENT, reply_payload()[0]);
+    TEST_ASSERT_EQUAL_UINT32(0U, get_le32(&reply_payload()[4]));
+}
+
+/* A dump that fails its checksum is exactly the one somebody needs to look at,
+ * so CORRUPT is reported AND the bytes stay readable. Folding this into ABSENT
+ * would throw away the only evidence of the crash it is evidence of. */
+void test_command_dump_info_reports_a_corrupt_dump_and_still_reads_it(void) {
+    setup();
+    fill_dump(2048U);
+    coredump_fake_set_dump(COREDUMP_CORRUPT, s_dump, 2048U);
+
+    TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_DUMP_INFO, NULL, 0U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+    TEST_ASSERT_EQUAL_UINT8(PROTOCOL_DUMP_CORRUPT, reply_payload()[0]);
+    TEST_ASSERT_EQUAL_UINT32(2048U, get_le32(&reply_payload()[4]));
+
+    setup();
+    coredump_fake_set_dump(COREDUMP_CORRUPT, s_dump, 2048U);
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_dump_read(0U, 64U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+    TEST_ASSERT_EQUAL_UINT32(64U, reply_payload_len());
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(s_dump, reply_payload(), 64U);
+}
+
+/* The offset has to be honoured, not just the length: a handler that always
+ * read from 0 would pass a length-only assertion and hand the host the first
+ * chunk sixteen times. */
+void test_command_dump_read_returns_the_stored_bytes(void) {
+    setup();
+    fill_dump(4096U);
+    coredump_fake_set_dump(COREDUMP_VALID, s_dump, 4096U);
+
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_dump_read(1024U, 512U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+    TEST_ASSERT_EQUAL_UINT32(512U, reply_payload_len());
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(&s_dump[1024], reply_payload(), 512U);
+}
+
+/* A dump larger than one chunk is the normal case - 64 KB of flash against a
+ * 4096-byte cap is sixteen frames - so the second chunk has to be as correct as
+ * the first, and the driver has to have been asked twice. */
+void test_command_dump_read_spans_more_than_one_chunk(void) {
+    setup();
+    fill_dump(8192U);
+    coredump_fake_set_dump(COREDUMP_VALID, s_dump, 8192U);
+
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_dump_read(0U, PROTOCOL_DUMP_CHUNK_MAX));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(&s_dump[0], reply_payload(), PROTOCOL_DUMP_CHUNK_MAX);
+
+    setup();
+    coredump_fake_set_dump(COREDUMP_VALID, s_dump, 8192U);
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_dump_read(PROTOCOL_DUMP_CHUNK_MAX, PROTOCOL_DUMP_CHUNK_MAX));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(&s_dump[PROTOCOL_DUMP_CHUNK_MAX], reply_payload(),
+                                  PROTOCOL_DUMP_CHUNK_MAX);
+    TEST_ASSERT_EQUAL_UINT32(1U, coredump_fake_read_count());
+}
+
+/* -4 and not -3: the request LENGTH is a correct 8 bytes, so what is wrong is a
+ * VALUE inside it. -3 would send a host looking at the wrong half of its frame.
+ * The cap is what keeps the reply inside the dispatcher's own 4 KB buffer. */
+void test_command_dump_read_refuses_a_length_outside_the_chunk_cap(void) {
+    setup();
+    fill_dump(8192U);
+    coredump_fake_set_dump(COREDUMP_VALID, s_dump, 8192U);
+
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_dump_read(0U, 0U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_BAD_ARG, reply_status());
+
+    setup();
+    coredump_fake_set_dump(COREDUMP_VALID, s_dump, 8192U);
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_dump_read(0U, PROTOCOL_DUMP_CHUNK_MAX + 1U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_BAD_ARG, reply_status());
+
+    /* And the driver was never asked, so a refused request reads no flash. */
+    TEST_ASSERT_EQUAL_UINT32(0U, coredump_fake_read_count());
+}
+
+/* Bounded to the dump, not to the partition: past the stored length there is
+ * only 0xFF padding, which looks like data and is not. Written as a wrap-safe
+ * check, so a huge offset cannot carry the sum back inside the range. */
+void test_command_dump_read_refuses_a_range_past_the_stored_dump(void) {
+    setup();
+    fill_dump(2048U);
+    coredump_fake_set_dump(COREDUMP_VALID, s_dump, 2048U);
+
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_dump_read(2000U, 64U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_BAD_ARG, reply_status());
+
+    setup();
+    coredump_fake_set_dump(COREDUMP_VALID, s_dump, 2048U);
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_dump_read(0xFFFFFFF0U, 64U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_BAD_ARG, reply_status());
+
+    /* Exactly to the last byte is legal - the boundary is not off by one. */
+    setup();
+    coredump_fake_set_dump(COREDUMP_VALID, s_dump, 2048U);
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_dump_read(1024U, 1024U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+}
+
+/* -5: the command is legal and the device is simply in no state to serve it.
+ * Distinct from the -4 above, which says the request itself is wrong. */
+void test_command_dump_read_refuses_when_no_dump_is_stored(void) {
+    setup();
+
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_dump_read(0U, 64U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_STATE, reply_status());
+}
+
+/* Erasing nothing succeeds, which is what makes a host's read-then-erase safe
+ * to retry after a lost reply. With CONFIG_ESP_COREDUMP_FLASH_NO_OVERWRITE on,
+ * an erase that failed the second time would strand the unit. */
+void test_command_dump_erase_succeeds_with_nothing_to_erase(void) {
+    setup();
+
+    TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_DUMP_ERASE, NULL, 0U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+    TEST_ASSERT_EQUAL_UINT32(0U, reply_payload_len());
+    TEST_ASSERT_EQUAL_UINT32(1U, coredump_fake_erase_count());
+}
+
+/* The erase has to actually clear it, not just answer 0: with NO_OVERWRITE on,
+ * a dump left in place means the unit captures no further panic for the rest of
+ * its life. Proved by asking DUMP_INFO afterwards, not by the status alone. */
+void test_command_dump_erase_clears_a_stored_dump(void) {
+    setup();
+    fill_dump(1024U);
+    coredump_fake_set_dump(COREDUMP_VALID, s_dump, 1024U);
+
+    TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_DUMP_ERASE, NULL, 0U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+    TEST_ASSERT_TRUE(coredump_fake_is_erased());
+
+    setup();
+    TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_DUMP_INFO, NULL, 0U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
+    TEST_ASSERT_EQUAL_UINT8(PROTOCOL_DUMP_ABSENT, reply_payload()[0]);
+}
+
+/* -6 is the honest answer when the flash underneath refused: nothing about the
+ * request is wrong and no device state a host can reach will fix it. */
+void test_command_dump_maps_a_driver_failure_to_hw(void) {
+    setup();
+    fill_dump(1024U);
+    coredump_fake_set_dump(COREDUMP_VALID, s_dump, 1024U);
+    coredump_fake_fail_read(COREDUMP_ERR_IO);
+
+    TEST_ASSERT_EQUAL_INT(FW_OK, send_dump_read(0U, 64U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_HW, reply_status());
+
+    setup();
+    coredump_fake_fail_info(COREDUMP_ERR_IO);
+    TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_DUMP_INFO, NULL, 0U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_HW, reply_status());
+
+    setup();
+    coredump_fake_fail_erase(COREDUMP_ERR_IO);
+    TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_DUMP_ERASE, NULL, 0U));
+    TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_HW, reply_status());
 }
 
 /*** end of file ***/

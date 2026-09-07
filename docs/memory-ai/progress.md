@@ -20,7 +20,20 @@ updated: 2026-09-07
   across a layer; no pin literal outside `driver/bsp/`; no source of ours under
   `workspace/`.
 - `docs/scripts/tool-esp.py` resolves the repo root and the workspace correctly
-  and refuses to run without `IDF_PATH`.
+  and refuses to run without `IDF_PATH`. The workspace is discovered rather than
+  hardcoded — **verified by running the CLI in every state**: a bogus `-w`,
+  `-w ../..`, nothing naming a workspace, `WORKSPACE=` in `.env.esp`, `-w`
+  overriding it, and a typo in `WORKSPACE=`. Each resolution was proved by which
+  workspace's
+  `sdkconfig.defaults` the flash size came back from (16 MB vs 4 MB), not by the
+  message alone. `format` still runs with an invalid `WORKSPACE=`, proving the
+  resolution is lazy. The fresh-clone path was walked too: two workspaces and no
+  `.env.esp` refuses **and writes the template**, the second run does not repeat
+  that line, and filling `WORKSPACE=` in resolves. Naming the product is
+  **required** - re-verified after that rule replaced the infer-the-only-one
+  fallback: a blank `WORKSPACE=` refuses with exit 1, `-w` alone passes with no
+  `.env.esp` at all (the CI shape, and no file is written), and `format` still
+  runs with `WORKSPACE=` blank.
 - The repo is published: 8 commits on `main`, `developing` and `release/v0.1`,
   with branch protection on the first two **verified by an actual rejected
   push**, not just by the API response.

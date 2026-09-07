@@ -30,6 +30,27 @@ away. The next session is a bench session, in this order:
 
 ## Recent changes
 
+- 2026-09-07 — **`tool-esp.py` picks the product workspace instead of holding
+  it.** `WORKSPACE = REPO / "workspace" / "0xF001"` is gone; workspaces are the
+  directories under `workspace/` that have a `CMakeLists.txt`, the answer is
+  `WORKSPACE=` in `.env.esp`, and `-w NAME` overrides it per run. The listing on
+  disk is deliberately the only list — enumerating products in `.env.esp` too
+  would be the copy that goes stale. **Naming the product is required and there
+  is no default**: the first version inferred it when the repo held exactly one
+  workspace, which made the answer optional where a mistake is cheap and
+  mandatory where it is not. So `.env.esp` here now says `WORKSPACE=0xF001`, and
+  `ci.yml`/`release.yml` pass `-w 0xF001` on their five build steps — the only
+  place either workflow states which product it builds.
+  Resolution is lazy so `format`/`test`/`analyse`, which cover the whole repo,
+  never ask. The refusal sentence is one function, `workspace_refusal()`, that
+  the `.env.esp` template interpolates as a worked two-product example - so the
+  file a developer has to fill in cannot end up quoting a message the script no
+  longer prints, and that refusal creates the file when a fresh clone has none.
+  Still open: `.github/workflows/release.yml` hardcodes
+  `workspace/0xF001/build` in its artifact step, and `merge` names the image
+  `app-updater-v<VERSION>-factory.bin` with no product in it — neither matters
+  with one product, both need a decision with two.
+
 - 2026-09-07 — **The USB command channel.** CDC-ACM on USB-OTG at
   `0xA331:0xF001`, speaking the binary protocol from
   `data-monitor/data-mirror-firmware/docs/spec/usb`. `middleware/protocol` holds

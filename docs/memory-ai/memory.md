@@ -30,7 +30,20 @@ _Generated 2026-09-07 - 33 durable doc(s)._
   across a layer; no pin literal outside `driver/bsp/`; no source of ours under
   `workspace/`.
 - `docs/scripts/tool-esp.py` resolves the repo root and the workspace correctly
-  and refuses to run without `IDF_PATH`.
+  and refuses to run without `IDF_PATH`. The workspace is discovered rather than
+  hardcoded — **verified by running the CLI in every state**: a bogus `-w`,
+  `-w ../..`, nothing naming a workspace, `WORKSPACE=` in `.env.esp`, `-w`
+  overriding it, and a typo in `WORKSPACE=`. Each resolution was proved by which
+  workspace's
+  `sdkconfig.defaults` the flash size came back from (16 MB vs 4 MB), not by the
+  message alone. `format` still runs with an invalid `WORKSPACE=`, proving the
+  resolution is lazy. The fresh-clone path was walked too: two workspaces and no
+  `.env.esp` refuses **and writes the template**, the second run does not repeat
+  that line, and filling `WORKSPACE=` in resolves. Naming the product is
+  **required** - re-verified after that rule replaced the infer-the-only-one
+  fallback: a blank `WORKSPACE=` refuses with exit 1, `-w` alone passes with no
+  `.env.esp` at all (the CI shape, and no file is written), and `format` still
+  runs with `WORKSPACE=` blank.
 - The repo is published: 8 commits on `main`, `developing` and `release/v0.1`,
   with branch protection on the first two **verified by an actual rejected
   push**, not just by the API response.
@@ -150,6 +163,27 @@ away. The next session is a bench session, in this order:
    proves the upgrade worked.
 
 ## Recent changes
+
+- 2026-09-07 — **`tool-esp.py` picks the product workspace instead of holding
+  it.** `WORKSPACE = REPO / "workspace" / "0xF001"` is gone; workspaces are the
+  directories under `workspace/` that have a `CMakeLists.txt`, the answer is
+  `WORKSPACE=` in `.env.esp`, and `-w NAME` overrides it per run. The listing on
+  disk is deliberately the only list — enumerating products in `.env.esp` too
+  would be the copy that goes stale. **Naming the product is required and there
+  is no default**: the first version inferred it when the repo held exactly one
+  workspace, which made the answer optional where a mistake is cheap and
+  mandatory where it is not. So `.env.esp` here now says `WORKSPACE=0xF001`, and
+  `ci.yml`/`release.yml` pass `-w 0xF001` on their five build steps — the only
+  place either workflow states which product it builds.
+  Resolution is lazy so `format`/`test`/`analyse`, which cover the whole repo,
+  never ask. The refusal sentence is one function, `workspace_refusal()`, that
+  the `.env.esp` template interpolates as a worked two-product example - so the
+  file a developer has to fill in cannot end up quoting a message the script no
+  longer prints, and that refusal creates the file when a fresh clone has none.
+  Still open: `.github/workflows/release.yml` hardcodes
+  `workspace/0xF001/build` in its artifact step, and `merge` names the image
+  `app-updater-v<VERSION>-factory.bin` with no product in it — neither matters
+  with one product, both need a decision with two.
 
 - 2026-09-07 — **The USB command channel.** CDC-ACM on USB-OTG at
   `0xA331:0xF001`, speaking the binary protocol from
@@ -372,7 +406,11 @@ Toolchain is ESP-IDF 6.x targeting ESP32-S3, C11. The build entry is
 - Pin numbers and peripheral instances live only in `driver/bsp/`. Verified: no
   pin literal appears under `application/` or `middleware/`.
 - A second product takes the next id as a sibling of `workspace/0xF001/`, never
-  a `<mcu>-<role>` name and never a `#if` inside a module.
+  a `<mcu>-<role>` name and never a `#if` inside a module. The directory with a
+  `CMakeLists.txt` in it is all the tooling needs: `tool-esp.py` discovers
+  workspaces from this listing and takes the default from `WORKSPACE=` in
+  `.env.esp` — see
+  [../interface/tool-esp-cli.md](../interface/tool-esp-cli.md).
 
 ## See also
 
@@ -1416,7 +1454,7 @@ it rather than silently checking every loop.
 - [../behavior/update-cycle-fsm.md](../behavior/update-cycle-fsm.md) — the state machine and the wrap arithmetic
 
 ### [interface] Developer CLI (tool-esp.py)
-*`interface/tool-esp-cli.md` - The command surface of the repo's single developer entry point and what each command expands to. - status: active - source: docs/scripts/tool-esp.py, .env.esp - keywords: tool-esp.py, .env.esp, IDF_PATH, IDF_PYTHON_ENV_PATH, MSYSTEM, build, flash, monitor, erase-flash, size, clean, menuconfig, format, test, analyse, --port, --check, UNITY_DIR, port detection*
+*`interface/tool-esp-cli.md` - The command surface of the repo's single developer entry point, what each command expands to, and how it picks the ESP-IDF checkout and the product workspace. - status: active - source: docs/scripts/tool-esp.py, .env.esp - keywords: tool-esp.py, .env.esp, IDF_PATH, WORKSPACE, IDF_PYTHON_ENV_PATH, MSYSTEM, build, flash, monitor, erase-flash, size, clean, fullclean, menuconfig, merge, format, test, analyse, --port, --workspace, -w, --check, UNITY_DIR, port detection, workspace resolution, resolve_workspace, workspace_refusal, ENV_TEMPLATE, env_value*
 
 # Developer CLI (tool-esp.py)
 
@@ -1431,7 +1469,7 @@ invocation, with the port detected.
 
 | Command | Expands to | Notes |
 |---------|-----------|-------|
-| `build` | `idf.py -C workspace/0xF001 build` | |
+| `build` | `idf.py -C workspace/<ws> build` | |
 | `flash` | `idf.py -C … flash monitor` | Deliberately fused: the boot log is what says whether it worked |
 | `monitor` | `idf.py -C … monitor` | |
 | `erase-flash` | `idf.py -C … erase-flash` | Whole chip. Port detected like the others |
@@ -1448,6 +1486,7 @@ invocation, with the port detected.
 | Flag | Applies to | Meaning |
 |------|-----------|---------|
 | `-p` / `--port` | `flash`, `monitor`, `erase-flash`, no command | Serial port, e.g. `COM7`. Omit and it is detected. |
+| `-w` / `--workspace` | every command that reaches the build, no command | Product workspace by directory name, e.g. `0xF001`. Omit and it comes from `WORKSPACE` in `.env.esp`; with neither, the run refuses. Rejected for `format`, `test`, `analyse` |
 | `--address` / `--size` | `erase-flash` | Region to erase, decimal or `0x` hex. Both or neither; both must be multiples of `0x1000`. `--size all` means “to the end of the flash” |
 | `--check` | `format` | Report instead of rewriting |
 | `--sanitize` | `test` | ASan + UBSan, into a separate `build/san` tree |
@@ -1475,13 +1514,15 @@ that silently does nothing is one somebody will believe in.
 
 ## Finding ESP-IDF
 
-`.env.esp` at the repo root holds `IDF_PATH=<checkout>`. It is per-machine and
-gitignored — committing it would point everyone else at a path that is not
-theirs.
+`.env.esp` at the repo root holds the two per-machine answers,
+`IDF_PATH=<checkout>` and `WORKSPACE=<product>`. It is gitignored — committing
+it would point everyone else at a path that is not theirs. The parser is six
+lines of `KEY=VALUE` splitting, not a dotenv library: a dependency to read two
+settings is a dependency to install before the first build.
 
 | Situation | What happens |
 |-----------|--------------|
-| No `.env.esp` | It is written from a commented template, and the run stops so it can be filled in |
+| No `.env.esp` | It is written from a commented template, and the run stops so it can be filled in. The which-product refusal writes the same template for the same reason |
 | `IDF_PATH=` still empty | Refuses, naming the file |
 | Path has no `export.bat`/`export.sh` | Refuses, saying it is not an ESP-IDF checkout |
 | Checkout present but tools never installed | Refuses, **quoting the export script's own error**, and naming `install.bat esp32s3` |
@@ -1503,6 +1544,73 @@ The guard is `IDF_PYTHON_ENV_PATH`, not `IDF_PATH`: `export.bat` sets the latter
 from its own location before doing any work, so a checkout with no tools
 installed still reports one.
 
+## Choosing the product workspace
+
+The workspace is **not** a constant in the script. A product workspace is any
+directory under `workspace/` that holds a `CMakeLists.txt`, and that directory
+listing *is* the list of products — a second copy in `.env.esp` would be a
+second thing to edit when a product is added, and the one that goes stale.
+**Which one to act on is required**, from `-w` or from `.env.esp`.
+
+Resolution, first answer wins:
+
+| Source | When it applies |
+|--------|-----------------|
+| `-w NAME` | Named on the command line; overrides `.env.esp` for that one run |
+| `WORKSPACE=` in `.env.esp` | The answer for this machine, filled in once |
+| — | Neither: **refuses**, listing the workspaces on disk |
+
+**There is no default, and one workspace in the repo is not one either.** An
+earlier version inferred it when the repo held exactly one — which made the
+answer optional on a developer's machine and mandatory in CI, the wrong way
+round: a product nobody chose is a product nobody checked, and a build that
+succeeded against the wrong one looks exactly like one that succeeded. The
+process environment is deliberately not a third source, because Jenkins and
+friends set `WORKSPACE` to the job directory.
+
+```
+$ ls workspace/
+0xF001/   0xF002/
+
+$ python docs/scripts/tool-esp.py build
+
+Nothing says which product to build. Put one of these in .env.esp
+as WORKSPACE=, or pass -w NAME:
+  0xF001
+  0xF002
+```
+
+The fix is one line in `.env.esp` — `WORKSPACE=0xF001` — and `build` stops
+asking. **CI and the release workflow pass `-w 0xF001` on every build step**,
+since a runner has no `.env.esp`; that flag is also the only place those
+workflows say which product they build. **The `.env.esp` template carries that whole exchange as a comment**,
+so the file that has to be filled in is also the file that shows why and with
+what; a developer meeting the refusal does not have to find this document.
+
+**The template does not quote that refusal, it interpolates it.**
+`workspace_refusal(names)` formats it once; `resolve_workspace()` calls it with
+the workspaces it found, and `ENV_TEMPLATE` calls it with a `["0xF001",
+"0xF002"]` example indented to comment depth by `textwrap.indent`. Rewording the
+message therefore rewords the comment, which a second copy of the sentence would
+not have done — and nothing would have gone red to say the file was quoting a
+sentence the script no longer prints.
+
+**The refusal creates `.env.esp` when it is missing**, from the same template
+`idf_root()` uses, and says so. On a fresh clone this refusal runs before
+anything has asked about ESP-IDF, so without that it would send a developer to
+edit a line in a file that does not exist yet. `WORKSPACE=` is deliberately the
+last line of the template, which is what the message can then point at.
+
+A name that is not in that listing is refused, naming where it came from
+(`-w`, or `WORKSPACE in .env.esp`) and what the real names are. The check is
+membership in the listing rather than "does the path exist", which is also what
+stops a `WORKSPACE=../../somewhere` from pointing `idf.py` outside the repo.
+
+**Resolution is lazy: only the commands that reach the build ask for it.**
+`format`, `test` and `analyse` cover the whole repo, so on a machine with
+several workspaces they must not open by demanding to be told which one — and
+`-w` is rejected for them outright.
+
 ## Behaviour worth knowing
 
 - **The screen is cleared on every run**, but only when stdout is a terminal.
@@ -1513,9 +1621,13 @@ installed still reports one.
   port is never the interesting failure.
 
 - **It resolves the repo root from its own file location**, then points every
-  `idf.py` at `workspace/0xF001`. The repo root has no `CMakeLists.txt`, so
+  `idf.py` at the workspace it was told to use. The repo root has no `CMakeLists.txt`, so
   `idf.py build` typed at the root finds no project — that `-C` is the reason
-  this wrapper exists. A second product means changing that one constant.
+  this wrapper exists. A second product needs no change here, only a directory
+  under `workspace/`.
+- **The echoed command starts at the `-C`**, so the log line says which product
+  was just built or flashed. With the workspace no longer a constant in the
+  file, that is the only place a reader can see it.
 - If `IDF_PATH` is unset it exits immediately with a readable message rather
   than letting the failure surface deep inside CMake.
 - If `clang-format` is not on PATH, `format` exits with a message.

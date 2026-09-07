@@ -92,7 +92,11 @@ Toolchain is ESP-IDF 6.x targeting ESP32-S3, C11. The build entry is
 - Pin numbers and peripheral instances live only in `driver/bsp/`. Verified: no
   pin literal appears under `application/` or `middleware/`.
 - A second product takes the next id as a sibling of `workspace/0xF001/`, never
-  a `<mcu>-<role>` name and never a `#if` inside a module.
+  a `<mcu>-<role>` name and never a `#if` inside a module. The directory with a
+  `CMakeLists.txt` in it is all the tooling needs: `tool-esp.py` discovers
+  workspaces from this listing and takes the default from `WORKSPACE=` in
+  `.env.esp` — see
+  [../interface/tool-esp-cli.md](../interface/tool-esp-cli.md).
 
 ## See also
 

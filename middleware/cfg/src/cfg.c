@@ -12,7 +12,6 @@
 #include "cfg.h"
 
 #include "esp_log.h"
-#include "esp_rom_crc.h"
 
 #include <string.h>
 
@@ -240,9 +239,9 @@ fw_err_t cfg_boot_fail_count_set(cfg_t *c, uint32_t count) {
 /* Arguments are checked at the public boundary (R-SRC-06); helpers assume it. */
 
 static uint32_t record_crc(const cfg_record_t *rec) {
-    /* esp_rom_crc32_le() seeds with ~crc and returns ~crc, so passing 0 gives
+    /* fw_crc32_le() seeds with ~crc and returns ~crc, so passing 0 gives
      * the standard CRC-32 of the buffer. */
-    return esp_rom_crc32_le(0U, (const uint8_t *)rec, (uint32_t)CFG_CRC_LEN);
+    return fw_crc32_le(0U, (const uint8_t *)rec, (uint32_t)CFG_CRC_LEN);
 }
 
 static fw_err_t record_validate(const cfg_record_t *rec, size_t read_len) {

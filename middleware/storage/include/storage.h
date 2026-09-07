@@ -1,8 +1,8 @@
 /**
  * @file    storage.h
- * @date    2026-09-06
- * @brief   Persists the updater's settings and boot record in NVS, versioned
- *          and CRC-protected.
+ * @date    2026-09-07
+ * @brief   Stores one opaque blob in NVS and hands it back. Knows nothing about
+ *          what is in it.
  *
  * @copyright (c) 2026 dtbao. All rights reserved.
  */
@@ -24,30 +24,16 @@ extern "C" {
 
 /* -------------------------- Constants & macros ------------------------- */
 
-/** Record layout version. Bump it and add a migration step on any field change. */
-#define STORAGE_RECORD_VERSION 1U
-
-/** Buffer sizes, including the terminating NUL. */
-#define STORAGE_URL_MAX     128U
-#define STORAGE_VERSION_MAX 32U
+/* Largest blob this module will store or read back.
+ *
+ * It exists because `storage_blob_save()` compares the new bytes against the
+ * stored ones before writing (R-CFG-05), and that compare needs a buffer of a
+ * size known at compile time — a VLA on a task stack is how a deep call chain
+ * overflows one. 256 bytes is comfortably over the 176 the settings record
+ * needs today; raise it here, in one place, when a caller needs more. */
+#define STORAGE_BLOB_MAX 256U
 
 /* -------------------------------- Types -------------------------------- */
-
-/**
- * @brief   The one record this module reads and writes.
- *
- * `version` is first and `crc32` last, over everything above it (R-CFG-01,
- * R-CFG-02). `length` lets a newer firmware read a shorter old record.
- */
-typedef struct {
-    uint16_t version;                             /**< STORAGE_RECORD_VERSION when written. */
-    uint16_t length;                              /**< sizeof() of the record as written.   */
-    char manifest_url[STORAGE_URL_MAX];           /**< NUL-terminated HTTPS manifest URL.   */
-    char last_ok_fw_version[STORAGE_VERSION_MAX]; /**< Last image confirmed healthy.     */
-    uint32_t check_interval_ms;                   /**< Between update checks, 0 disables.   */
-    uint32_t boot_fail_count;                     /**< Unconfirmed boots since last good.   */
-    uint32_t crc32;                               /**< CRC-32 over the bytes above.         */
-} storage_record_t;
 
 /** @brief Configuration for one storage instance. */
 typedef struct {
@@ -73,15 +59,7 @@ typedef struct {
 storage_cfg_t storage_cfg_default(void);
 
 /**
- * @brief   Fills a record with the compiled-in defaults for every setting.
- * @return  By value, CRC already correct. A device with erased flash boots on
- *          exactly this (R-CFG-03).
- * @note    Reentrant, any task.
- */
-storage_record_t storage_record_default(void);
-
-/**
- * @brief   Opens the NVS namespace the record lives in.
+ * @brief   Opens the NVS namespace the blob lives in.
  * @param   st    caller-allocated instance, zeroed by this call
  * @param   cfg   namespace and key; the strings must outlive `st`, they are
  *                not copied
@@ -100,31 +78,42 @@ fw_err_t storage_init(storage_t *st, const storage_cfg_t *cfg);
 fw_err_t storage_deinit(storage_t *st);
 
 /**
- * @brief   Reads the record, validating its version, length and CRC.
- * @param   st          initialized instance
- * @param[out] out_rec  the stored record on FW_OK; untouched otherwise. The
- *                      caller owns the buffer.
- * @return  FW_OK, FW_ERR_PARAM on NULL, FW_ERR_STATE before init,
- *          FW_ERR_NOT_FOUND when nothing was ever written, FW_ERR_CRC when the
- *          stored bytes did not check out, FW_ERR_IO on an NVS failure.
- * @note    A caller that gets FW_ERR_CRC or FW_ERR_NOT_FOUND uses
- *          `storage_record_default()` — this function never guesses for it
- *          (R-CFG-02). One caller only.
+ * @brief   Reads the stored blob back, whatever it holds.
+ * @param   st           initialized instance
+ * @param[out] out       buffer to fill; untouched unless FW_OK is returned
+ * @param   cap          capacity of `out` in bytes
+ * @param[out] out_len   bytes written, on FW_OK
+ * @return  FW_OK; FW_ERR_PARAM on a NULL argument or a zero `cap`;
+ *          FW_ERR_STATE before init; FW_ERR_NOT_FOUND when nothing was ever
+ *          written; FW_ERR_CRC when the stored blob does not fit `cap`;
+ *          FW_ERR_NO_SPACE when `cap` is past STORAGE_BLOB_MAX;
+ *          FW_ERR_IO on an NVS failure.
+ * @note    This module validates nothing about the content — the CRC and the
+ *          layout version belong to whoever owns the shape (R-LAY-03 in
+ *          spirit: the byte pusher does not interpret the bytes). The one
+ *          exception is the size, because NVS refuses to hand over a blob that
+ *          does not fit and there is nothing else to report: a stored blob of
+ *          a different length is not one this build wrote, so it comes back as
+ *          FW_ERR_CRC — "damaged" from the caller's point of view, which is
+ *          the verdict that makes the caller fall back to its defaults rather
+ *          than fail bring-up. One caller only.
  */
-fw_err_t storage_record_load(storage_t *st, storage_record_t *out_rec);
+fw_err_t storage_blob_load(storage_t *st, void *out, size_t cap, size_t *out_len);
 
 /**
- * @brief   Writes the record, stamping its version, length and CRC first.
- * @param   st    initialized instance
- * @param   rec   record to store; copied, not retained. `version`, `length`
- *                and `crc32` are overwritten by this call.
- * @return  FW_OK, FW_ERR_PARAM on NULL, FW_ERR_STATE before init, FW_ERR_IO on
- *          an NVS failure.
+ * @brief   Writes the blob, replacing whatever was there.
+ * @param   st     initialized instance
+ * @param   data   bytes to store; copied, not retained
+ * @param   len    number of bytes, 1 .. STORAGE_BLOB_MAX
+ * @return  FW_OK, FW_ERR_PARAM on a NULL argument or a zero `len`,
+ *          FW_ERR_STATE before init, FW_ERR_NO_SPACE when `len` is past
+ *          STORAGE_BLOB_MAX or NVS is full, FW_ERR_IO on any other NVS
+ *          failure.
  * @note    Skips the write when the stored bytes already match, so a caller
  *          may call it every cycle without wearing the sector out (R-CFG-05).
  *          Blocks on flash. One caller only; not callable from an ISR.
  */
-fw_err_t storage_record_save(storage_t *st, const storage_record_t *rec);
+fw_err_t storage_blob_save(storage_t *st, const void *data, size_t len);
 
 #ifdef __cplusplus
 }

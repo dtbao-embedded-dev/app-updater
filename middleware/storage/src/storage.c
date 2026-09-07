@@ -1,8 +1,8 @@
 /**
  * @file    storage.c
- * @date    2026-09-06
- * @brief   Persists the updater's settings and boot record in NVS, versioned
- *          and CRC-protected.
+ * @date    2026-09-07
+ * @brief   Stores one opaque blob in NVS and hands it back. Knows nothing about
+ *          what is in it.
  *
  * @copyright (c) 2026 dtbao. All rights reserved.
  */
@@ -13,22 +13,17 @@
 
 #include "esp_err.h"
 #include "esp_log.h"
-#include "esp_rom_crc.h"
 #include "nvs.h"
 
 #include <string.h>
 
 /* --------------------------- Private macros ---------------------------- */
 
-/* Compiled-in defaults. A device with erased flash boots on exactly these
- * (R-CFG-03), so every field has one — none is "always written anyway". */
-#define STORAGE_DEFAULT_NAMESPACE    "updater"
-#define STORAGE_DEFAULT_KEY          "record"
-#define STORAGE_DEFAULT_MANIFEST_URL "https://example.invalid/firmware/0xF001.json"
-#define STORAGE_DEFAULT_CHECK_MS     (6U * 60U * 60U * 1000U) /* 6 h */
-
-/** Bytes of the record the CRC covers: everything before the crc32 field. */
-#define STORAGE_CRC_LEN (offsetof(storage_record_t, crc32))
+/* Where the blob goes. The namespace and key are the module's only compiled-in
+ * defaults: what is *in* the blob is somebody else's business (see
+ * middleware/cfg). */
+#define STORAGE_DEFAULT_NAMESPACE "updater"
+#define STORAGE_DEFAULT_KEY       "record"
 
 /* ---------------------------- Private types ---------------------------- */
 
@@ -38,8 +33,6 @@ static const char *TAG = "storage";
 
 /* --------------------- Private function prototypes --------------------- */
 
-static uint32_t record_crc(const storage_record_t *rec);
-static fw_err_t record_validate(const storage_record_t *rec, size_t read_len);
 static fw_err_t from_esp_err(esp_err_t err);
 
 /* -------------------------- Public functions --------------------------- */
@@ -50,18 +43,6 @@ storage_cfg_t storage_cfg_default(void) {
         .nvs_key       = STORAGE_DEFAULT_KEY,
     };
     return cfg;
-}
-
-storage_record_t storage_record_default(void) {
-    storage_record_t rec;
-
-    memset(&rec, 0, sizeof(rec));
-    rec.version = (uint16_t)STORAGE_RECORD_VERSION;
-    rec.length  = (uint16_t)sizeof(rec);
-    (void)strncpy(rec.manifest_url, STORAGE_DEFAULT_MANIFEST_URL, STORAGE_URL_MAX - 1U);
-    rec.check_interval_ms = STORAGE_DEFAULT_CHECK_MS;
-    rec.crc32             = record_crc(&rec);
-    return rec;
 }
 
 fw_err_t storage_init(storage_t *st, const storage_cfg_t *cfg) {
@@ -99,67 +80,69 @@ fw_err_t storage_deinit(storage_t *st) {
     return FW_OK;
 }
 
-fw_err_t storage_record_load(storage_t *st, storage_record_t *out_rec) {
-    if ((st == NULL) || (out_rec == NULL)) {
+fw_err_t storage_blob_load(storage_t *st, void *out, size_t cap, size_t *out_len) {
+    if ((st == NULL) || (out == NULL) || (out_len == NULL) || (cap == 0U)) {
         return FW_ERR_PARAM;
+    }
+    if (cap > STORAGE_BLOB_MAX) {
+        return FW_ERR_NO_SPACE;
     }
     if (!st->is_init) {
         return FW_ERR_STATE;
     }
 
-    storage_record_t stored;
-    size_t len = sizeof(stored);
-
-    memset(&stored, 0, sizeof(stored));
-    const esp_err_t err = nvs_get_blob((nvs_handle_t)st->nvs_handle, st->nvs_key, &stored, &len);
+    size_t len          = cap;
+    const esp_err_t err = nvs_get_blob((nvs_handle_t)st->nvs_handle, st->nvs_key, out, &len);
     if (err == ESP_ERR_NVS_NOT_FOUND) {
         return FW_ERR_NOT_FOUND;
+    }
+    if (err == ESP_ERR_NVS_INVALID_LENGTH) {
+        /* NVS refused because the stored blob is bigger than `cap`, so none of
+         * it was copied. A blob of a length this build does not use is not one
+         * this build wrote - report it as damaged, which is the verdict that
+         * makes the caller fall back to its defaults instead of failing
+         * bring-up on a record it could never have parsed anyway. */
+        ESP_LOGW(TAG, "stored blob does not fit %u bytes", (unsigned)cap);
+        return FW_ERR_CRC;
     }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "nvs_get_blob failed: esp_err=0x%x", (unsigned)err);
         return from_esp_err(err);
     }
 
-    const fw_err_t verdict = record_validate(&stored, len);
-    if (verdict != FW_OK) {
-        return verdict;
-    }
-
-    *out_rec = stored;
+    *out_len = len;
     return FW_OK;
 }
 
-fw_err_t storage_record_save(storage_t *st, const storage_record_t *rec) {
-    if ((st == NULL) || (rec == NULL)) {
+fw_err_t storage_blob_save(storage_t *st, const void *data, size_t len) {
+    if ((st == NULL) || (data == NULL) || (len == 0U)) {
         return FW_ERR_PARAM;
+    }
+    if (len > STORAGE_BLOB_MAX) {
+        return FW_ERR_NO_SPACE;
     }
     if (!st->is_init) {
         return FW_ERR_STATE;
     }
 
-    storage_record_t to_write = *rec;
-    to_write.version          = (uint16_t)STORAGE_RECORD_VERSION;
-    to_write.length           = (uint16_t)sizeof(to_write);
-    to_write.crc32            = record_crc(&to_write);
-
     /* Read-compare-write: NVS wear is measured in sectors, not in calls
      * (R-CFG-05). The compare is cheap; the erase is not. */
-    storage_record_t current;
-    if (storage_record_load(st, &current) == FW_OK) {
-        if (memcmp(&current, &to_write, sizeof(current)) == 0) {
+    uint8_t current[STORAGE_BLOB_MAX];
+    size_t current_len = 0U;
+    if (storage_blob_load(st, current, len, &current_len) == FW_OK) {
+        if ((current_len == len) && (memcmp(current, data, len) == 0)) {
             return FW_OK;
         }
     }
 
-    const esp_err_t set_err =
-        nvs_set_blob((nvs_handle_t)st->nvs_handle, st->nvs_key, &to_write, sizeof(to_write));
+    const esp_err_t set_err = nvs_set_blob((nvs_handle_t)st->nvs_handle, st->nvs_key, data, len);
     if (set_err != ESP_OK) {
         ESP_LOGE(TAG, "nvs_set_blob failed: esp_err=0x%x", (unsigned)set_err);
         return from_esp_err(set_err);
     }
 
     /* NVS commits the new copy before dropping the old one, so a power cut
-     * here leaves the previous record readable (R-CFG-06). */
+     * here leaves the previous blob readable (R-CFG-06). */
     const esp_err_t commit_err = nvs_commit((nvs_handle_t)st->nvs_handle);
     if (commit_err != ESP_OK) {
         ESP_LOGE(TAG, "nvs_commit failed: esp_err=0x%x", (unsigned)commit_err);
@@ -171,38 +154,6 @@ fw_err_t storage_record_save(storage_t *st, const storage_record_t *rec) {
 /* -------------------------- Private functions -------------------------- */
 
 /* Arguments are checked at the public boundary (R-SRC-06); helpers assume it. */
-
-static uint32_t record_crc(const storage_record_t *rec) {
-    /* esp_rom_crc32_le() seeds with ~crc and returns ~crc, so passing 0 gives
-     * the standard CRC-32 of the buffer. */
-    return esp_rom_crc32_le(0U, (const uint8_t *)rec, (uint32_t)STORAGE_CRC_LEN);
-}
-
-static fw_err_t record_validate(const storage_record_t *rec, size_t read_len) {
-    if (read_len != sizeof(*rec)) {
-        ESP_LOGW(TAG, "record length mismatch: got=%u want=%u", (unsigned)read_len,
-                 (unsigned)sizeof(*rec));
-        return FW_ERR_CRC;
-    }
-    if (rec->crc32 != record_crc(rec)) {
-        ESP_LOGW(TAG, "record crc mismatch: got=0x%08lX want=0x%08lX", (unsigned long)rec->crc32,
-                 (unsigned long)record_crc(rec));
-        return FW_ERR_CRC;
-    }
-    if (rec->version != (uint16_t)STORAGE_RECORD_VERSION) {
-        /* TODO(dtbao): one migration function per version step, chained
-         * (R-CFG-04). Until a version 2 exists there is nothing to migrate,
-         * and an unknown version falls back to defaults rather than guessing. */
-        ESP_LOGW(TAG, "record version unknown: got=%u want=%u", (unsigned)rec->version,
-                 (unsigned)STORAGE_RECORD_VERSION);
-        return FW_ERR_NOT_FOUND;
-    }
-    if (rec->manifest_url[STORAGE_URL_MAX - 1U] != '\0') {
-        ESP_LOGW(TAG, "record manifest_url is not terminated");
-        return FW_ERR_CRC;
-    }
-    return FW_OK;
-}
 
 /* R-ERR-04: the vendor code stops here, logged at the call site above. */
 static fw_err_t from_esp_err(esp_err_t err) {

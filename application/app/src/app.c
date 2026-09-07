@@ -23,7 +23,6 @@
 #include "esp_app_desc.h"
 #include "esp_chip_info.h"
 #include "esp_log.h"
-#include "esp_mac.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/stream_buffer.h"
@@ -176,7 +175,7 @@ static void print_banner(void) {
     const unsigned rev = chip.revision;
 
     uint8_t mac[6] = {0};
-    (void)esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    (void)bsp_mac_get(BSP_MAC_WIFI, mac);
 
     /* One product, one chip. A switch over esp_chip_model_t would trip
      * -Wswitch-enum on every model this repo will never be built for. */

@@ -40,6 +40,7 @@ Python 3 so one set of commands runs on Windows and Linux without a shell port.
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 import re
@@ -69,10 +70,49 @@ PORT_COMMANDS = ("flash", "monitor", "erase-flash")
 # what the workspace CMakeLists says to do, and this is that command.
 IDF_COMMANDS = ("build", "flash", "monitor", "size", "clean", "fullclean", "menuconfig",
                 "merge", "erase-flash")
-VERSION_FILE = REPO / "VERSION"
 
 # Flash erases a sector at a time; a partial erase has to line up with one.
 SECTOR_SIZE = 0x1000
+
+# strftime("%b") follows LC_TIME, so on a machine with a non-English locale it
+# would spell September something else and the artifact name would depend on
+# whose laptop built it. A fixed table is what makes the name the same
+# everywhere, CI included.
+MONTH_ABBR = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def cmake_project_name(workspace: Path) -> str:
+    """The project() token from a workspace's CMakeLists, which names its image.
+
+    Read rather than restated: ESP-IDF derives app_updater.bin/.elf/.map from
+    that one token, so a copy here would be a second answer able to disagree
+    with the first.
+    """
+    text = (workspace / "CMakeLists.txt").read_text(encoding="utf-8")
+    found = re.search(r"^\s*project\(([A-Za-z0-9_.+-]+)", text, re.MULTILINE)
+    if not found:
+        sys.exit(f"\n{workspace / 'CMakeLists.txt'} has no "
+                 f"project(<name>) call, so the image name cannot be "
+                 f"derived from it.\n")
+    return found.group(1)
+
+
+def factory_image_name(project: str, pid: str, when: datetime.datetime) -> str:
+    """bl_<project>_<pid>_<MonDDYY>.bin - the one image that flashes a blank board.
+
+    `bl_` because it starts at the bootloader: this is the merged image written
+    at offset 0, not the OTA payload. The product id is in the name because two
+    products build two different images and a downloads folder is where they
+    meet. The date is what tells two builds of the same version apart, which a
+    version alone cannot - a bench sees several a day.
+
+    ponytail: date only, no time of day, so two builds on the same day produce
+    the same name and the second overwrites the first without a word. Add
+    -%H%M to `stamp` if that starts costing anyone an afternoon.
+    """
+    stamp = f"{MONTH_ABBR[when.month - 1]}{when.day:02d}{when.year % 100:02d}"
+    return f"bl_{project}_{pid}_{stamp}.bin"
 
 
 def workspace_refusal(names: list[str]) -> str:
@@ -650,11 +690,15 @@ def main() -> int:
         return idf(["size", "size-components"], None)
     if args.command == "merge":
         # One image flashed at 0x0 provisions a blank board, with no offsets to
-        # get wrong at a bench. The name carries the version so a downloaded
-        # file says what it is; VERSION is the single source (R-VER-01), so the
-        # release workflow does not get to invent a second one.
-        version = VERSION_FILE.read_text(encoding="utf-8").strip()
-        return idf(["merge-bin", "-o", f"app-updater-v{version}-factory.bin"], None)
+        # get wrong at a bench. Every part of the name comes from the build
+        # itself - the project() token, the workspace directory, today's date -
+        # so nothing here can drift from what was actually built. The version
+        # is deliberately not in it: it is in the image header via PROJECT_VER
+        # (R-VER-01) and `tool-usb.py version` reads it back off a unit, which
+        # a file name cannot be checked against.
+        name = factory_image_name(cmake_project_name(WORKSPACE), WORKSPACE.name,
+                                  datetime.datetime.now(datetime.timezone.utc))
+        return idf(["merge-bin", "-o", name], None)
     return idf([args.command], None)
 
 

@@ -180,7 +180,7 @@ usb_cdc_err_t usb_cdc_deinit(usb_cdc_t *dev) {
     return USB_CDC_OK;
 }
 
-usb_cdc_err_t usb_cdc_write(usb_cdc_t *dev, const uint8_t *data, size_t len) {
+usb_cdc_err_t usb_cdc_write(const usb_cdc_t *dev, const uint8_t *data, size_t len) {
     if ((dev == NULL) || (data == NULL) || (len == 0U)) {
         return USB_CDC_ERR_PARAM;
     }

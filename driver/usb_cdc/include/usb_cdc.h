@@ -129,7 +129,8 @@ usb_cdc_err_t usb_cdc_deinit(usb_cdc_t *dev);
  * queue what fits, flush, repeat. A host that opened the port and stopped
  * reading is a timeout, not a hang.
  *
- * @param   dev    initialized instance
+ * @param   dev    initialized instance; read only, hence the const - this
+ *                 sends bytes to the host, it does not change the instance
  * @param   data   bytes to send; copied into the FIFO, not retained
  * @param   len    number of bytes, 1 or more
  * @return  USB_CDC_OK when everything was queued and flushed,
@@ -139,7 +140,7 @@ usb_cdc_err_t usb_cdc_deinit(usb_cdc_t *dev);
  *          USB_CDC_ERR_IO on an SDK failure.
  * @note    Blocks the calling task. One caller only; not callable from an ISR.
  */
-usb_cdc_err_t usb_cdc_write(usb_cdc_t *dev, const uint8_t *data, size_t len);
+usb_cdc_err_t usb_cdc_write(const usb_cdc_t *dev, const uint8_t *data, size_t len);
 
 /**
  * @brief   Reports whether a host has configured the device.

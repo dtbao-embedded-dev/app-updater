@@ -9,9 +9,21 @@ updated: 2026-09-07
 
 ## Current focus
 
-The **USB command channel** is written and green: 56 host tests, a clean
-firmware build, and three mutation checks proving the tests bite. A PC can now
-read a unit and push an image into `app_firmware` without a network.
+The **settings now have a library of their own.** `middleware/cfg` owns the
+record, its defaults and one validated get/set pair per setting;
+`middleware/storage` was cut down to an opaque NVS blob store, and the two
+adapter wrappers in `application/app` are the only place left that knows the
+settings live in NVS. 69 host tests green, firmware builds, `cfg` verified
+present in `app_updater.map`.
+
+**What that leaves open, deliberately:** nothing calls `cfg_save()` yet, so a
+setting changed at runtime is still lost on reset. That was equally true before
+— `storage_record_save()` had no caller either — but the API and its tests now
+exist, so the first writer is cheap to add.
+
+The **USB command channel** is written and green: a clean firmware build and
+three mutation checks proving its tests bite. A PC can now read a unit and push
+an image into `app_firmware` without a network.
 
 **And it has still never run on hardware.** That is unchanged and now matters
 more, because the channel added two things a host test cannot reach: the USB
@@ -29,6 +41,38 @@ away. The next session is a bench session, in this order:
    proves the upgrade worked.
 
 ## Recent changes
+
+- 2026-09-07 — **A settings library, and `storage` reduced to a byte pusher.**
+  `middleware/cfg` holds `cfg_record_t` (the four settings behind a
+  version/length/CRC envelope), the compiled-in defaults, and
+  `cfg_<field>_get`/`_set` per setting. Persistence is **not** its business: it
+  arrives as a `cfg_store_t` of two callbacks, which is what makes re-pointing
+  the settings at the reserved `cfg_setting` partition a new adapter instead of
+  an edit in `cfg`. `middleware/storage` lost the record entirely — no
+  `storage_record_t`, no CRC, no `esp_rom` — and gained
+  `storage_blob_load`/`storage_blob_save` with a `STORAGE_BLOB_MAX` ceiling,
+  which exists so the read-compare-write wear guard keeps a fixed compare
+  buffer rather than a VLA on a task stack. `application/app` holds a `cfg_t`
+  and supplies the two wrappers. **A setter writes nothing**, by design: the
+  caller decides when a batch of changes is worth one flash write, and a
+  call-counting fake store asserts that negative. Three pieces of validation
+  are new: both stored strings must be terminated inside their own field (only
+  the URL was checked), a refused value leaves the old one in place, and
+  `check_interval_ms` is refused at or past the scheduling horizon — that last
+  one used to reach `updater_init()` unchecked and **fail bring-up** on a
+  CRC-valid record. No migration was written and none is needed: layout and NVS
+  key are unchanged.
+
+- 2026-09-07 — **`driver/bsp` has a per-chip port.** `BSP_USB_DP_GPIO`,
+  `BSP_USB_DM_GPIO` and the two console pins left `bsp.h`. They are fixed in
+  silicon, so this repo has no business restating them: `src/port/bsp_esp32s3.c`
+  reads `USBPHY_DP_NUM`, `USBPHY_DM_NUM`, `U0TXD_GPIO_NUM` and `U0RXD_GPIO_NUM`
+  from the chip's own `soc/` headers behind the new `bsp_priv.h` contract, and
+  `driver/bsp/CMakeLists.txt` picks `src/port/bsp_${IDF_TARGET}.c` — failing
+  with an instruction, not a missing-source error, when a target has no port.
+  A part with no internal USB PHY gets a port that reports `BSP_GPIO_NONE`,
+  not a `bsp.c` that fails to compile. `usb_pins.h` exists only for esp32s2 and
+  esp32s3, which is exactly why that include sits in the port.
 
 - 2026-09-07 — **`tool-esp.py` picks the product workspace instead of holding
   it.** `WORKSPACE = REPO / "workspace" / "0xF001"` is gone; workspaces are the
@@ -157,6 +201,18 @@ away. The next session is a bench session, in this order:
    it shipped in v0.1.0 and is named in that release's notes.
 
 ## Active decisions
+
+- **`CFG_CHECK_INTERVAL_MAX_MS` is a deliberate duplicate** of
+  `UPDATER_HORIZON_MS` in `application/updater/src/updater.c`. `middleware/` may
+  not include a header from `application/` (R-LAY-01), and validating the value
+  where it arrives beats failing bring-up minutes later — so the number is
+  restated one layer down. Change one and you must change the other; nothing
+  goes red to say so.
+- **`cfg` does not depend on `storage`.** It could have called it directly and
+  saved two wrapper functions; the adapter exists so the `cfg_setting`
+  partition stays reachable without editing either module. That is the one place
+  in this change where a seam was chosen over the shorter diff, and the reason
+  is written down here rather than assumed obvious.
 
 - The USB dispatcher asks the application whether a slot write is in progress
   through a callback; it must not include `updater.h`, because `middleware/`

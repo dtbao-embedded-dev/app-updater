@@ -7,7 +7,7 @@
 > architecture -> data -> interface -> behavior -> rule (then adr/).
 > Confidence per doc: 🟢 confirmed | 🟡 inferred (verify) | 🔴 gap (needs a human).
 
-_Generated 2026-09-07 - 33 durable doc(s)._
+_Generated 2026-09-07 - 34 durable doc(s)._
 
 ## State (transient)
 
@@ -19,13 +19,13 @@ _Generated 2026-09-07 - 33 durable doc(s)._
 
 ## What works
 
-- The full three-layer tree exists with six modules, each with one public
-  header, one source file, and a component registration.
+- The full three-layer tree exists with ten modules, each with one public
+  header, at least one source file, and a component registration.
 - **Verified by execution:** the update-cycle state machine and the status-code
   lookup compile clean on host GCC under the house warning set with `-Werror`,
   and every behavioural assertion passes — including the 2^32 ms clock wrap, the
   scheduling horizon rejection, and the repeatable stop/deinit contract.
-- **Verified mechanically:** `clang-format` clean across all 24 sources; each
+- **Verified mechanically:** `clang-format` clean across all 43 sources; each
   symbol prefix declared in exactly one module directory; no upward include
   across a layer; no pin literal outside `driver/bsp/`; no source of ours under
   `workspace/`.
@@ -47,10 +47,10 @@ _Generated 2026-09-07 - 33 durable doc(s)._
 - The repo is published: 8 commits on `main`, `developing` and `release/v0.1`,
   with branch protection on the first two **verified by an actual rejected
   push**, not just by the API response.
-- A host test harness that actually runs: 13 Unity tests, green, built under the
-  firmware's own `-Werror` warning set. **Proven to have teeth** — breaking the
-  wrap-safe due check makes exactly one test go red, and restoring it makes the
-  suite green again.
+- A host test harness that actually runs: **69 Unity tests, green**, built under
+  the firmware's own `-Werror` warning set. **Proven to have teeth** — breaking
+  the wrap-safe due check makes exactly one test go red, and restoring it makes
+  the suite green again.
 - Static analysis at a clean baseline, verified by running it locally **and in
   the CI container**: `cppcheck` 0 findings, `clang-tidy` 0 findings, no secrets
   in the tree. One real finding (a parameter that could be `const`) was found
@@ -82,6 +82,23 @@ _Generated 2026-09-07 - 33 durable doc(s)._
 - **v0.1.0 is released**, cut end to end by `tool-release.py`: seven phases, two
   merged pull requests, an annotated tag on `main`, and eight published
   artifacts. Both workflows green on the runs that produced it.
+- **A settings library with a persistence seam, `middleware/cfg`.** It owns the
+  record, the defaults and one validated get/set pair per setting; where the
+  bytes go arrives as a two-callback adapter, so `cfg` names no storage
+  technology and `middleware/storage` shrank to an opaque NVS blob store. The
+  host suite went from 56 tests to **69, all green**, and one of the new ones
+  was **proved to have teeth by mutation**: deleting the
+  `CFG_CHECK_INTERVAL_MAX_MS` guard from the setter reddens exactly
+  `test_cfg_check_interval_refuses_the_scheduling_horizon` and nothing else.
+  Restoring it returns the suite to green.
+- **`cfg` is in the image, not just in the build.** Verified by reading
+  `app_updater.map`: `cfg_init`, `cfg_record_default` and
+  `cfg_check_interval_ms_get` carry real addresses, and `app_updater.bin` grew
+  from 0x3a820 to 0x3ac20 when `app` started requiring the component.
+- **`driver/bsp` has a per-chip port.** The silicon-fixed USB and console pins
+  left `bsp.h` for `src/port/bsp_esp32s3.c`, which reads them from the chip's
+  own `soc/` headers; `driver/bsp/CMakeLists.txt` selects the port by
+  `IDF_TARGET` and refuses with an instruction when a target has none.
 
 ## What's left
 
@@ -98,7 +115,8 @@ _Generated 2026-09-07 - 33 durable doc(s)._
 6. **Flash and boot v0.1.0 on real hardware.** Nothing has ever executed on a
    board, so everything about the flash layout is still arithmetic.
 7. An **on-target** smoke test. The host suite runs; nothing exercises a board.
-8. Record migration in `storage`, before any field release.
+8. Record migration in `middleware/cfg` (`record_validate()` carries the
+   TODO), before any field release.
 9. Enable `gcc -fanalyzer` — deferred on purpose, not forgotten. The trigger is
    the first code that does buffer arithmetic, parsing, or allocation; see
    [rule/static-analysis.md](rule/static-analysis.md) for the exact list and the
@@ -135,6 +153,17 @@ _Generated 2026-09-07 - 33 durable doc(s)._
   inside our translation units. That is the rule working; fix at the call site,
   never by silencing the warning.
 
+- ⚠ **Nothing in the firmware calls `cfg_save()`.** Settings are read at boot
+  and never written — unchanged from before the refactor, when
+  `storage_record_save()` had no caller either — so the linker drops
+  `cfg_save` from the image. The API and its tests exist; the first writer will
+  be whatever records `last_ok_fw_version` or `boot_fail_count`. Until then a
+  setting changed at runtime is lost on reset.
+- ⚠ `application/updater/CMakeLists.txt` still declares `PRIV_REQUIRES ...
+  storage`, but `updater.c` includes no header of it. A dead dependency, found
+  while wiring `cfg` and deliberately left alone: removing it is not this
+  change's business.
+
 ### active-context.md
 
 # Active Context
@@ -143,9 +172,21 @@ _Generated 2026-09-07 - 33 durable doc(s)._
 
 ## Current focus
 
-The **USB command channel** is written and green: 56 host tests, a clean
-firmware build, and three mutation checks proving the tests bite. A PC can now
-read a unit and push an image into `app_firmware` without a network.
+The **settings now have a library of their own.** `middleware/cfg` owns the
+record, its defaults and one validated get/set pair per setting;
+`middleware/storage` was cut down to an opaque NVS blob store, and the two
+adapter wrappers in `application/app` are the only place left that knows the
+settings live in NVS. 69 host tests green, firmware builds, `cfg` verified
+present in `app_updater.map`.
+
+**What that leaves open, deliberately:** nothing calls `cfg_save()` yet, so a
+setting changed at runtime is still lost on reset. That was equally true before
+— `storage_record_save()` had no caller either — but the API and its tests now
+exist, so the first writer is cheap to add.
+
+The **USB command channel** is written and green: a clean firmware build and
+three mutation checks proving its tests bite. A PC can now read a unit and push
+an image into `app_firmware` without a network.
 
 **And it has still never run on hardware.** That is unchanged and now matters
 more, because the channel added two things a host test cannot reach: the USB
@@ -163,6 +204,38 @@ away. The next session is a bench session, in this order:
    proves the upgrade worked.
 
 ## Recent changes
+
+- 2026-09-07 — **A settings library, and `storage` reduced to a byte pusher.**
+  `middleware/cfg` holds `cfg_record_t` (the four settings behind a
+  version/length/CRC envelope), the compiled-in defaults, and
+  `cfg_<field>_get`/`_set` per setting. Persistence is **not** its business: it
+  arrives as a `cfg_store_t` of two callbacks, which is what makes re-pointing
+  the settings at the reserved `cfg_setting` partition a new adapter instead of
+  an edit in `cfg`. `middleware/storage` lost the record entirely — no
+  `storage_record_t`, no CRC, no `esp_rom` — and gained
+  `storage_blob_load`/`storage_blob_save` with a `STORAGE_BLOB_MAX` ceiling,
+  which exists so the read-compare-write wear guard keeps a fixed compare
+  buffer rather than a VLA on a task stack. `application/app` holds a `cfg_t`
+  and supplies the two wrappers. **A setter writes nothing**, by design: the
+  caller decides when a batch of changes is worth one flash write, and a
+  call-counting fake store asserts that negative. Three pieces of validation
+  are new: both stored strings must be terminated inside their own field (only
+  the URL was checked), a refused value leaves the old one in place, and
+  `check_interval_ms` is refused at or past the scheduling horizon — that last
+  one used to reach `updater_init()` unchecked and **fail bring-up** on a
+  CRC-valid record. No migration was written and none is needed: layout and NVS
+  key are unchanged.
+
+- 2026-09-07 — **`driver/bsp` has a per-chip port.** `BSP_USB_DP_GPIO`,
+  `BSP_USB_DM_GPIO` and the two console pins left `bsp.h`. They are fixed in
+  silicon, so this repo has no business restating them: `src/port/bsp_esp32s3.c`
+  reads `USBPHY_DP_NUM`, `USBPHY_DM_NUM`, `U0TXD_GPIO_NUM` and `U0RXD_GPIO_NUM`
+  from the chip's own `soc/` headers behind the new `bsp_priv.h` contract, and
+  `driver/bsp/CMakeLists.txt` picks `src/port/bsp_${IDF_TARGET}.c` — failing
+  with an instruction, not a missing-source error, when a target has no port.
+  A part with no internal USB PHY gets a port that reports `BSP_GPIO_NONE`,
+  not a `bsp.c` that fails to compile. `usb_pins.h` exists only for esp32s2 and
+  esp32s3, which is exactly why that include sits in the port.
 
 - 2026-09-07 — **`tool-esp.py` picks the product workspace instead of holding
   it.** `WORKSPACE = REPO / "workspace" / "0xF001"` is gone; workspaces are the
@@ -292,6 +365,18 @@ away. The next session is a bench session, in this order:
 
 ## Active decisions
 
+- **`CFG_CHECK_INTERVAL_MAX_MS` is a deliberate duplicate** of
+  `UPDATER_HORIZON_MS` in `application/updater/src/updater.c`. `middleware/` may
+  not include a header from `application/` (R-LAY-01), and validating the value
+  where it arrives beats failing bring-up minutes later — so the number is
+  restated one layer down. Change one and you must change the other; nothing
+  goes red to say so.
+- **`cfg` does not depend on `storage`.** It could have called it directly and
+  saved two wrapper functions; the adapter exists so the `cfg_setting`
+  partition stays reachable without editing either module. That is the one place
+  in this change where a seam was chosen over the shorter diff, and the reason
+  is written down here rather than assumed obvious.
+
 - The USB dispatcher asks the application whether a slot write is in progress
   through a callback; it must not include `updater.h`, because `middleware/`
   may not include from `application/`. The plan for this work originally had it
@@ -347,7 +432,8 @@ before anyone opens a header.
 | `middleware/ota_http/` | Fetches an image over HTTPS and hands it out chunk by chunk. |
 | `middleware/protocol/` | The USB wire format: frame codec, status codes, opcode map. |
 | `middleware/command/` | Dispatches a decoded USB frame to the handler that serves it. |
-| `middleware/storage/` | The persisted settings/boot record in NVS. |
+| `middleware/cfg/` | The device's settings: the record, its defaults, and one validated get/set pair per setting. Persistence arrives as an adapter. |
+| `middleware/storage/` | One opaque blob in NVS. Knows nothing about what is in it. |
 | `driver/bsp/` | Pin map, clock, flash geometry. The only place a pin number appears, and the only module with a per-chip port. |
 | `driver/usb_cdc/` | The CDC-ACM byte pipe on USB-OTG. Owns the TinyUSB stack. |
 | `workspace/0xF001/` | Build entry for product 0xF001: CMakeLists, sdkconfig.defaults, partitions.csv. |
@@ -376,13 +462,13 @@ Every directory under the three layer directories has the same inside:
 | `src/<mod>.c` | Implementation. |
 | `src/<mod>_priv.h` | Internal declarations. Present only where something is actually shared: `application/app/`, `middleware/command/` and `driver/bsp/`. |
 | `src/port/<mod>_<target>.c` | The per-chip half of a module, one file per MCU family, picked by `IDF_TARGET` (R-LIB-02). Present only in `driver/bsp/`. |
-| `test/test_<mod>.c` | Host tests, present for `fw`, `updater`, `protocol` and `command`. Each function must also be listed in `test/host/runner.c` or it never runs. |
+| `test/test_<mod>.c` | Host tests, present for `fw`, `updater`, `protocol`, `command` and `cfg`. Each function must also be listed in `test/host/runner.c` or it never runs. |
 | `CMakeLists.txt` | ESP-IDF component registration. |
 
 The directory name, the public header name, and the symbol prefix are the same
 word, so one grep for the prefix finds the folder, the file and every symbol in
 it. Verified: each of `app`, `updater`, `fw`, `ota_http`, `protocol`, `command`,
-`storage`, `bsp`, `usb_cdc` is declared in exactly one module directory.
+`cfg`, `storage`, `bsp`, `usb_cdc` is declared in exactly one module directory.
 
 `middleware/command/` has two sources - `command.c` for the dispatch and the
 stateless handlers, `command_upgrade.c` for the image transfer session - which
@@ -429,7 +515,7 @@ Toolchain is ESP-IDF 6.x targeting ESP32-S3, C11. The build entry is
 - [../rule/coding-standard-source.md](../rule/coding-standard-source.md) — where the R-XXX-nn rules come from
 
 ### [architecture] Layering and Dependencies
-*`architecture/layering-and-dependencies.md` - The call direction between layers, the component dependency graph, and why there are two separate error code spaces. - status: active - source: application/app/CMakeLists.txt, application/updater/CMakeLists.txt, middleware/*/CMakeLists.txt, driver/bsp/CMakeLists.txt - keywords: REQUIRES, PRIV_REQUIRES, layering, dependency direction, callback, fw_err_t, bsp_err_t, usb_cdc_err_t, command_busy_cb_t*
+*`architecture/layering-and-dependencies.md` - The call direction between layers, the component dependency graph, and why there are two separate error code spaces. - status: active - source: application/app/CMakeLists.txt, application/updater/CMakeLists.txt, middleware/*/CMakeLists.txt, driver/bsp/CMakeLists.txt - keywords: REQUIRES, PRIV_REQUIRES, layering, dependency direction, callback, fw_err_t, bsp_err_t, usb_cdc_err_t, command_busy_cb_t, cfg_store_t, cfg_load_cb_t, cfg_save_cb_t*
 
 # Layering and Dependencies
 
@@ -444,7 +530,7 @@ opens a header.
 ```mermaid
 flowchart TD
     APP["application/ - app, updater"]
-    MW["middleware/ - fw, ota_http, storage, protocol, command"]
+    MW["middleware/ - fw, ota_http, cfg, storage, protocol, command"]
     DRV["driver/ - bsp pins and clock (+ per-chip port), usb_cdc the USB stack"]
     SDK["ESP-IDF - nvs_flash, esp_http_client, app_update, esp_timer, esp_tinyusb"]
 
@@ -459,12 +545,13 @@ the module's own public header; `PRIV_REQUIRES` means only the `.c` uses it.
 
 | Component | REQUIRES | PRIV_REQUIRES (ours) | PRIV_REQUIRES (SDK) |
 |-----------|----------|----------------------|---------------------|
-| `app` | `fw` | `bsp`, `command`, `protocol`, `storage`, `updater`, `usb_cdc` | `app_update`, `esp_app_format`, `esp_partition`, `esp_timer`, `freertos`, `nvs_flash` |
+| `app` | `fw` | `bsp`, `cfg`, `command`, `protocol`, `storage`, `updater`, `usb_cdc` | `app_update`, `esp_app_format`, `esp_partition`, `esp_timer`, `freertos`, `nvs_flash` |
 | `updater` | `fw` | `ota_http`, `storage` | `app_update`, `esp_partition` |
 | `ota_http` | `fw` | — | `esp_http_client`, `esp-tls` |
 | `command` | `fw`, `protocol` | — | `app_update`, `esp_app_format`, `esp_partition`, `esp_hw_support`, `esp_system`, `esp_rom`, `freertos` |
 | `protocol` | `fw` | — | `esp_rom` |
-| `storage` | `fw` | — | `nvs_flash`, `esp_rom` |
+| `cfg` | `fw` | — | `esp_rom` |
+| `storage` | `fw` | — | `nvs_flash` |
 | `fw` | — | — | — |
 | `bsp` | — | — | `esp_driver_gpio`, `esp_hw_support`, `spi_flash`, `soc` (via the common requires, for the port's pin headers) |
 | `usb_cdc` | — | — | `esp_tinyusb`, `freertos` |
@@ -489,13 +576,15 @@ the only edit.
 
 Vendor status codes (`esp_err_t`) never escape the module that called the SDK:
 each of `bsp`, `storage` and `ota_http` has a private `from_esp_err()` helper
-that logs the vendor value and returns the module's own code.
+that logs the vendor value and returns the module's own code. `cfg` needs none:
+it calls no SDK function that can fail.
 
 ## Reproduction notes
 
-- Verified: nothing under `driver/` includes `fw.h`, `storage.h`, `ota_http.h`,
-  `protocol.h`, `command.h`, `updater.h` or `app.h`; nothing under
-  `middleware/` includes `updater.h` or `app.h`.
+- Verified: nothing under `driver/` includes `fw.h`, `cfg.h`, `storage.h`,
+  `ota_http.h`, `protocol.h`, `command.h`, `updater.h` or `app.h`; nothing under
+  `middleware/` includes `updater.h` or `app.h`. `cfg.h` and `storage.h` do not
+  include each other.
 - `middleware/fw` is included sideways by its middleware siblings. That is a
   one-way include of a leaf, not a cycle.
 - **The USB channel is the sharpest case of "calls go down".** The dispatcher
@@ -509,6 +598,16 @@ that logs the vendor value and returns the module's own code.
   changes from nothing below it, but `ota_http` reports progress upward through
   a `void *ctx` callback supplied at init — the module does not know the name of
   what it notifies.
+- **`cfg` uses the same shape to reach *sideways* rather than upward.** It owns
+  the settings record but names no storage technology: persistence arrives as a
+  `cfg_store_t` of two callbacks plus a `void *ctx`, and the concrete pair —
+  `cfg_store_load` / `cfg_store_save` in `application/app/src/app.c` — forwards
+  to `storage_blob_*`. So `cfg` does not depend on `storage` at all, and
+  re-pointing the settings at the reserved `cfg_setting` partition is a new
+  adapter rather than an edit in either module. `cfg` also restates
+  `UPDATER_HORIZON_MS` as `CFG_CHECK_INTERVAL_MAX_MS`, because it must validate
+  against a constraint that lives in `application/` and may not include the
+  header that holds it.
 - `esp_err_t` must not appear in any public header above the driver layer.
   `ota_http_t` and `storage_t` therefore hold their vendor handles as `void *`
   and `uint32_t` respectively, described in their interface docs.
@@ -857,76 +956,94 @@ The `bsp_err_t` → `fw_err_t` map is applied in exactly one place, in
 - [../interface/fw-status-api.md](../interface/fw-status-api.md) — the `fw_err_str()` contract
 - [../architecture/layering-and-dependencies.md](../architecture/layering-and-dependencies.md) — why there are two spaces
 
-### [data] Persisted Storage Record
-*`data/storage-record.md` - The single NVS blob the updater persists, its field layout, and the invariants a reader must enforce. - status: active - source: middleware/storage/include/storage.h:44-58, middleware/storage/src/storage.c:56-66, middleware/storage/src/storage.c:176-207 - keywords: storage_record_t, STORAGE_RECORD_VERSION, crc32, manifest_url, check_interval_ms, boot_fail_count, nvs blob*
+### [data] Persisted Settings Record
+*`data/storage-record.md` - The single versioned, CRC-protected record the device persists, its field layout, and the invariants a reader must enforce. - status: active - source: middleware/cfg/include/cfg.h:88-113, middleware/cfg/src/cfg.c:44-54, middleware/cfg/src/cfg.c:238-290 - keywords: cfg_record_t, CFG_RECORD_VERSION, crc32, manifest_url, last_ok_fw_version, check_interval_ms, boot_fail_count, record_validate, nvs blob, settings record*
 
-# Persisted Storage Record
+# Persisted Settings Record
 
-> One versioned, CRC-protected blob in NVS holds everything the updater must remember across a reboot; anything that fails validation falls back to compiled-in defaults.
+> One versioned, CRC-protected record holds everything the device must remember across a reboot; anything that fails validation falls back to compiled-in defaults.
+
+**The record is `cfg_record_t`, owned by `middleware/cfg`.** Where it is stored
+is a separate decision: the shipped adapter hands the bytes to
+`middleware/storage`, which writes them as one opaque NVS blob under a
+namespace + key chosen at init (defaults `updater` / `record`). Nothing in the
+layout below depends on that choice.
 
 ## Shape
-
-Stored as a single NVS blob under a namespace + key chosen at init (defaults
-`updater` / `record`).
 
 | Field | Type | Meaning | Notes |
 |-------|------|---------|-------|
 | `version` | uint16 | Record layout version | **Always first.** Currently `1`. |
-| `length` | uint16 | Size of the record as written | Lets newer firmware read a shorter old record. |
+| `length` | uint16 | Size of the record as written | Lets newer firmware recognise a shorter old record. |
 | `manifest_url` | char[128] | HTTPS manifest URL | NUL-terminated. Default points at an `.invalid` host. |
 | `last_ok_fw_version` | char[32] | Last image confirmed healthy | Empty by default. |
-| `check_interval_ms` | uint32 | Milliseconds between update checks | Default 6 h. `0` disables checking. |
+| `check_interval_ms` | uint32 | Milliseconds between update checks | Default 6 h. `0` disables checking. Must be `< 0x80000000`. |
 | `boot_fail_count` | uint32 | Unconfirmed boots since the last good one | `0` by default. |
 | `crc32` | uint32 | CRC-32 over every byte above it | **Always last.** |
+
+Total 176 bytes on the target: every field is naturally aligned in this order,
+so the struct carries no padding and the CRC covers no indeterminate bytes.
 
 ## Invariants
 
 1. `version` is the first field and `crc32` the last. The CRC covers exactly the
    bytes before `crc32`, computed as the offset of that member.
-2. Every field has a compiled-in default. A device with erased flash must boot
-   into a usable state, so no setting is left uninitialised "because it is
+2. Every field has a compiled-in default. A device with erased storage must come
+   up in a usable state, so no setting is left uninitialised "because it is
    always written".
 3. The CRC is validated on **every** read. A power cut mid-write and flash
    bit-rot both produce a record that parses fine and means nothing.
-4. `manifest_url` must be NUL-terminated within its buffer; the validator
-   rejects a record whose last byte is not `\0`, because a stored string is
-   untrusted input.
+4. **Both** strings must be NUL-terminated within their own buffer. A getter
+   reads to the first NUL, so an unterminated field is a read past the end of
+   it — and a stored string is untrusted input.
 5. A record whose stored `length` differs from the compiled `sizeof` is
    rejected as damaged.
 6. An unrecognised `version` falls back to defaults rather than being
    reinterpreted.
+7. **A valid CRC is not enough.** `check_interval_ms` must be below the update
+   cycle's scheduling horizon; a record that passes its CRC and holds a larger
+   value is refused whole. Refusing beats clamping: the defaults are known
+   good, a clamped value is a setting nobody chose.
+8. A string setter zeroes the entire field before copying. Those bytes are in
+   the CRC, so a stale tail would make two records holding identical settings
+   compare unequal and cost a flash write the adapter would otherwise skip.
 
 ## Validation verdicts
 
-`record_validate()` returns, in this order of checks:
+`record_validate()` in `middleware/cfg/src/cfg.c` returns, in this order of
+checks:
 
 | Condition | Verdict |
 |-----------|---------|
 | length mismatch | `FW_ERR_CRC` |
 | CRC mismatch | `FW_ERR_CRC` |
 | unknown `version` | `FW_ERR_NOT_FOUND` |
-| `manifest_url` unterminated | `FW_ERR_CRC` |
+| either string unterminated | `FW_ERR_CRC` |
+| `check_interval_ms >= CFG_CHECK_INTERVAL_MAX_MS` | `FW_ERR_PARAM` |
 | otherwise | `FW_OK` |
 
-The caller treats `FW_ERR_CRC` and `FW_ERR_NOT_FOUND` the same way — use the
-defaults and log it. The module never guesses on the caller's behalf.
+`cfg_init()` treats all three failure verdicts the same way — use the defaults,
+log which one it was, and still report `FW_OK` to the caller, because the
+instance is usable. The module never guesses which half of a damaged record
+survived.
 
 ## Formats & encoding
 
-The blob is written and read as a raw struct, so its byte layout is whatever the
-compiler produces for the target. That is acceptable because only this firmware
-on this chip ever reads it. **It is not a wire format** — an OTA manifest or a
-host tool must not assume this layout.
+The record is written and read as a raw struct, so its byte layout is whatever
+the compiler produces for the target. That is acceptable because only this
+firmware on this chip ever reads it. **It is not a wire format** — an OTA
+manifest or a host tool must not assume this layout.
 
-🔴 **Open hole (code, not knowledge):** there is no migration path yet. `STORAGE_RECORD_VERSION` is `1` and
-`record_validate()` carries a TODO for the chained per-version migration
-functions. Adding a field to this struct today invalidates every deployed
-record; the deployed unit falls back to defaults, silently losing its
-`manifest_url`. Resolve before the first field release.
+🔴 **Open hole (code, not knowledge):** there is no migration path yet.
+`CFG_RECORD_VERSION` is `1` and `record_validate()` carries a TODO for the
+chained per-version migration functions. Adding a field to this struct today
+invalidates every deployed record; the deployed unit falls back to defaults,
+silently losing its `manifest_url`. Resolve before the first field release.
 
 ## See also
 
-- [../interface/storage-api.md](../interface/storage-api.md) — the contract that reads and writes it
+- [../interface/cfg-api.md](../interface/cfg-api.md) — the accessors that read and write it, and what each refuses
+- [../interface/storage-api.md](../interface/storage-api.md) — the NVS blob store the shipped adapter calls
 - [../behavior/config-load-and-save.md](../behavior/config-load-and-save.md) — the load/save algorithm
 
 ### [data] Flash Layout and Partitions
@@ -1302,22 +1419,36 @@ schematic. They are the single point to fix before any bring-up.
 - [../data/error-code-model.md](../data/error-code-model.md) — `bsp_err_t` and its map to `fw_err_t`
 
 ### [interface] Storage API
-*`interface/storage-api.md` - The contract for loading and saving the persisted updater record in NVS. - status: active - source: middleware/storage/include/storage.h, middleware/storage/src/storage.c:48-174 - keywords: storage.h, storage_init, storage_deinit, storage_record_load, storage_record_save, storage_cfg_default, storage_record_default, storage_t, storage_cfg_t*
+*`interface/storage-api.md` - The contract for putting one opaque blob in NVS and reading it back, with no opinion about what is in it. - status: active - source: middleware/storage/include/storage.h, middleware/storage/src/storage.c:40-151 - keywords: storage.h, storage_init, storage_deinit, storage_blob_load, storage_blob_save, storage_cfg_default, storage_t, storage_cfg_t, STORAGE_BLOB_MAX, nvs_get_blob, nvs_set_blob*
 
 # Storage API
 
-> Open a namespace, read a validated record or learn it is unusable, write one only when it actually changed.
+> Open a namespace, read the stored bytes back, write them only when they actually changed — and never look inside them.
+
+## Responsibility
+
+This module is a byte pusher. It knows a namespace, a key, and how to avoid
+wearing a sector out. It does **not** know the record's fields, its version, or
+its CRC — those belong to `middleware/cfg`, which owns the shape and hands
+these two calls a finished blob.
+
+The split is what makes the settings re-pointable: a second adapter writing the
+reserved `cfg_setting` partition instead needs nothing from here and nothing
+from `cfg`.
 
 ## Contract
 
 | Name | Signature (text) | Does | Returns / errors |
 |------|------------------|------|------------------|
 | `storage_cfg_default` | `storage_cfg_t storage_cfg_default(void)` | Namespace `updater`, key `record` | By value; every field set |
-| `storage_record_default` | `storage_record_t storage_record_default(void)` | The compiled-in defaults, CRC already correct | By value |
 | `storage_init` | `fw_err_t storage_init(storage_t *st, const storage_cfg_t *cfg)` | Opens the NVS namespace read-write | `FW_OK`; `FW_ERR_PARAM` on NULL; `FW_ERR_STATE` if already open; `FW_ERR_IO` if NVS refused |
 | `storage_deinit` | `fw_err_t storage_deinit(storage_t *st)` | Closes the handle | `FW_OK`; `FW_ERR_PARAM` on NULL |
-| `storage_record_load` | `fw_err_t storage_record_load(storage_t *st, storage_record_t *out_rec)` | Reads and validates | `FW_OK`; `FW_ERR_NOT_FOUND` if never written or version unknown; `FW_ERR_CRC` if damaged; `FW_ERR_IO`; `FW_ERR_PARAM`/`FW_ERR_STATE` |
-| `storage_record_save` | `fw_err_t storage_record_save(storage_t *st, const storage_record_t *rec)` | Stamps version/length/CRC, then writes if changed | `FW_OK`; `FW_ERR_IO`; `FW_ERR_PARAM`/`FW_ERR_STATE` |
+| `storage_blob_load` | `fw_err_t storage_blob_load(storage_t *st, void *out, size_t cap, size_t *out_len)` | Reads the stored bytes | `FW_OK`; `FW_ERR_NOT_FOUND` if never written; `FW_ERR_CRC` if the stored blob does not fit `cap`; `FW_ERR_NO_SPACE` if `cap > STORAGE_BLOB_MAX`; `FW_ERR_IO`; `FW_ERR_PARAM`/`FW_ERR_STATE` |
+| `storage_blob_save` | `fw_err_t storage_blob_save(storage_t *st, const void *data, size_t len)` | Writes, but only if the bytes differ | `FW_OK`; `FW_ERR_NO_SPACE` if `len > STORAGE_BLOB_MAX` or NVS is full; `FW_ERR_IO`; `FW_ERR_PARAM`/`FW_ERR_STATE` |
+
+The two blob signatures are deliberately one `storage_t *` away from
+`cfg_load_cb_t` and `cfg_save_cb_t`, so the shipped adapter in
+`application/app/src/app.c` is two one-line wrappers and nothing else.
 
 ## Parameters & config
 
@@ -1329,36 +1460,51 @@ compiled-in one.
 `storage_t` also holds the vendor NVS handle as a `uint32_t`, so no SDK type
 appears in this middleware header.
 
+`STORAGE_BLOB_MAX` is `256`. It exists because `storage_blob_save()` compares
+the new bytes against the stored ones before writing, and that compare needs a
+buffer whose size is known at compile time — a VLA on a task stack is how a deep
+call chain overflows one. The settings record needs 176 bytes today.
+
 ## Contract rules
 
 - `nvs_flash_init()` must succeed **before** `storage_init()`. This module does
   not initialise the NVS subsystem; the application does.
-- `storage_record_save()` overwrites the caller's `version`, `length` and
-  `crc32` — a caller must not try to set them.
-- `storage_record_save()` blocks on flash and is not callable from an ISR. One
-  caller only.
-- On `FW_ERR_CRC` or `FW_ERR_NOT_FOUND` the caller is expected to fall back to
-  `storage_record_default()`. The module never substitutes defaults itself.
-
-## Contract rules
-
+- **`FW_ERR_CRC` from `storage_blob_load()` is not a checksum verdict** — this
+  module computes no checksum. It is what a stored blob of the wrong length
+  comes back as: NVS refuses to copy a blob bigger than `cap`, so there is
+  nothing else to report, and "damaged" is the verdict that makes the caller
+  fall back to its defaults rather than fail bring-up on a record it could
+  never have parsed. The real CRC check lives in `middleware/cfg`.
+- Both blob calls block on flash and are not callable from an ISR. One caller
+  only.
+- Nothing here substitutes a default. `FW_ERR_NOT_FOUND` and `FW_ERR_CRC` go
+  back to the caller, which decides (see `cfg_init()`).
 - The instance pointer is always the first argument, the config struct always
   the second, both `const` where possible.
-- Configuration arrives as one `const <mod>_cfg_t *`, never a long argument
-  list, so a field can be added without breaking a caller.
 - The status is the return value; results leave through trailing
   out-parameters.
-- `deinit` (and `stop`, where present) is safe to call twice and safe on a
-  partly initialised instance — cleanup runs on the error path, where the
-  instance is by definition half-built.
+- `deinit` is safe to call twice and safe on a partly initialised instance —
+  cleanup runs on the error path, where the instance is by definition
+  half-built.
 - An operation called in the wrong lifecycle state returns `FW_ERR_STATE`, never
   undefined behaviour. The instance carries its own state flag and operations
   check it first.
 - Arguments are validated at the top of every public function, before any state
   changes. Private helpers assume that check already happened.
 
+## Reproduction notes
+
+- ⚠ **No host test covers this module**, and after the blob refactor there is
+  nothing pure left in it to cover: every line is `nvs_open`, `nvs_get_blob`,
+  `nvs_set_blob`, `nvs_commit`, the memcmp guard, or the `from_esp_err()` map.
+  The logic that used to be testable here — defaults, version, CRC, string
+  termination — moved to `middleware/cfg`, which has 13 of them.
+- `PRIV_REQUIRES` no longer lists `esp_rom`: the only user of
+  `esp_rom_crc32_le()` was the record CRC, and that left with the record.
+
 ## See also
 
+- [cfg-api.md](cfg-api.md) — the module that owns the record and calls these two through an adapter
 - [../data/storage-record.md](../data/storage-record.md) — the record shape and its invariants
 - [../behavior/config-load-and-save.md](../behavior/config-load-and-save.md) — the algorithm behind these calls
 
@@ -2141,6 +2287,115 @@ holds both implementations to one value rather than to each other.
 - [command-map.md](command-map.md) — every opcode
 - [tool-esp-cli.md](tool-esp-cli.md) — the build and flash entry point
 
+### [interface] Cfg API
+*`interface/cfg-api.md` - The contract for reading and writing the device's settings, one validated accessor pair per setting, with persistence supplied by the caller as an adapter. - status: active - source: middleware/cfg/include/cfg.h, middleware/cfg/src/cfg.c, middleware/cfg/test/test_cfg.c - keywords: cfg.h, cfg_t, cfg_store_t, cfg_record_t, cfg_load_cb_t, cfg_save_cb_t, cfg_init, cfg_deinit, cfg_save, cfg_defaults_set, cfg_record_default, cfg_manifest_url_get, cfg_manifest_url_set, cfg_last_ok_fw_version_get, cfg_last_ok_fw_version_set, cfg_check_interval_ms_get, cfg_check_interval_ms_set, cfg_boot_fail_count_get, cfg_boot_fail_count_set, CFG_URL_MAX, CFG_VERSION_MAX, CFG_RECORD_VERSION, CFG_CHECK_INTERVAL_MAX_MS*
+
+# Cfg API
+
+> `middleware/cfg` owns what a setting may be; it does not own where the setting goes — the caller hands it a load/save adapter and the module never names a storage technology.
+
+## Responsibility
+
+Two jobs used to live in `middleware/storage`: defining the settings record and
+putting it in NVS. This module took the first. It holds the record, the
+compiled-in defaults, and the validation that decides whether a value is
+acceptable at all. Persistence leaves through `cfg_store_t`, the same
+callback-with-`ctx` shape `ota_http` uses to report progress upward without
+naming its listener.
+
+That seam is the point: re-pointing the settings at the reserved `cfg_setting`
+partition instead of NVS is a new adapter and not one edit inside this module.
+
+## Constants
+
+| Macro | Value | Meaning |
+|-------|-------|---------|
+| `CFG_RECORD_VERSION` | `1` | Record layout version, stamped on every save. |
+| `CFG_URL_MAX` | `128` | `manifest_url` buffer, including its NUL. |
+| `CFG_VERSION_MAX` | `32` | `last_ok_fw_version` buffer, including its NUL. |
+| `CFG_CHECK_INTERVAL_MAX_MS` | `0x80000000` | Exclusive ceiling on `check_interval_ms`. |
+
+`CFG_CHECK_INTERVAL_MAX_MS` is a **deliberate duplicate** of `UPDATER_HORIZON_MS`
+in `application/updater/src/updater.c`. The update cycle schedules by comparing
+a wrapped `uint32` difference against half its range, so an interval at or past
+that reads as "already due" on every step. `middleware/` may not include a
+header from `application/` (R-LAY-01), so the number is restated here and
+validated where the value arrives — instead of failing bring-up minutes later.
+Change one and you must change the other; nothing goes red to say so.
+
+## Types
+
+| Type | Role |
+|------|------|
+| `cfg_load_cb_t` | `fw_err_t (*)(void *ctx, void *out, size_t cap, size_t *out_len)` — reads the stored record back. |
+| `cfg_save_cb_t` | `fw_err_t (*)(void *ctx, const void *data, size_t len)` — persists the whole record. |
+| `cfg_store_t` | `{ load, save, ctx }`. Both callbacks required; `ctx` is borrowed and must outlive the instance. |
+| `cfg_record_t` | The record itself — see [../data/storage-record.md](../data/storage-record.md). |
+| `cfg_t` | `{ is_init, store, rec }`. Caller-allocated; the module owns the contents. |
+
+`cfg_record_t` sits inside the public `cfg_t` only because the caller allocates
+the instance, exactly as `command_upgrade_t` does inside `command_t`. Read and
+write it through the accessors — they are the only things that validate.
+
+## Contract
+
+| Function | Returns |
+|----------|---------|
+| `cfg_record_default(void)` | The compiled-in record, by value, CRC already correct. No instance needed. |
+| `cfg_init(c, store)` | `FW_OK` whenever the instance is usable — **including** when the stored record was missing, damaged or out of range and the defaults were taken instead. `FW_ERR_PARAM` on a NULL argument or a NULL callback, `FW_ERR_STATE` when already initialized, and any other failure the adapter's `load` reported, unchanged. |
+| `cfg_deinit(c)` | `FW_OK`, or `FW_ERR_PARAM` on NULL. Repeatable and safe on a partly built instance (R-LFC-04); nothing is owned, so zeroing is the whole release. |
+| `cfg_defaults_set(c)` | `FW_OK`, `FW_ERR_PARAM`, `FW_ERR_STATE`. **RAM only** — a factory reset that reboots before `cfg_save()` leaves the old record readable. |
+| `cfg_save(c)` | `FW_OK`, `FW_ERR_PARAM`, `FW_ERR_STATE`, or whatever `save` returned. Stamps `version`, `length` and `crc32` first. |
+| `cfg_<field>_get(c, out[, cap])` | `FW_OK`, `FW_ERR_PARAM` on NULL, `FW_ERR_STATE` before init. String getters add `FW_ERR_NO_SPACE` when `cap` cannot hold the string and its NUL — and copy nothing in that case. |
+| `cfg_<field>_set(c, value)` | `FW_OK`, `FW_ERR_STATE` before init, `FW_ERR_PARAM` for any value this build cannot accept — **the stored value survives a refusal**. |
+
+The four settings, with what each setter refuses:
+
+| Setting | Accessor pair | Refused |
+|---------|---------------|---------|
+| `manifest_url` | `cfg_manifest_url_get` / `_set` | NULL, `""`, or a string needing `CFG_URL_MAX` bytes or more. Empty is refused because there is no such manifest — disabling checks is what a zero interval is for. |
+| `last_ok_fw_version` | `cfg_last_ok_fw_version_get` / `_set` | NULL, or a string needing `CFG_VERSION_MAX` bytes or more. `""` is legal and is the shipped default: no image has confirmed itself yet. |
+| `check_interval_ms` | `cfg_check_interval_ms_get` / `_set` | `>= CFG_CHECK_INTERVAL_MAX_MS`. `0` is accepted and means checking is disabled — a real setting, not a missing one (R-CFG-03). |
+| `boot_fail_count` | `cfg_boot_fail_count_get` / `_set` | Nothing; every `uint32` is a legal count. |
+
+## Lifecycle and threading
+
+`cfg_init()` is the only thing that calls `load`, and `cfg_save()` the only
+thing that calls `save` — **a setter never writes**. That split is what lets a
+caller change four settings and pay for one flash write; `test_cfg.c` asserts
+the negative with a call-counting fake store, so a setter that starts writing
+goes red.
+
+Both `cfg_init()` and `cfg_save()` block for as long as the adapter does and
+have one caller only; neither is callable from an ISR. Getters are readable
+from another task, with the usual caveat that the value may be stale on return.
+
+## Reproduction notes
+
+- No `esp_*` type appears in `cfg.h` (R-LAY-03); the whole surface is
+  `fw_err_t`, `uint32_t`, `char *` and `size_t`. That is what makes the module
+  compile and run in the host suite with no stub but `esp_log.h` and
+  `esp_rom_crc.h`.
+- `cfg_init()` sorts the adapter's return into two groups. `FW_ERR_NOT_FOUND`
+  and `FW_ERR_CRC` are normal — nothing stored, or bytes that did not check out
+  — and lead to the defaults. Everything else is the caller's problem, logged
+  once here and returned unchanged (R-LOG-04).
+- A string setter zeroes the whole field before copying, not just the tail past
+  the new string. Those bytes go into the CRC, so a stale tail would make two
+  records holding identical settings compare unequal and cost a flash write the
+  adapter would otherwise skip.
+- 13 host tests, all green, listed in `test/host/runner.c`. One was proved to
+  have teeth by mutation: deleting the `CFG_CHECK_INTERVAL_MAX_MS` guard from
+  the setter reddens exactly `test_cfg_check_interval_refuses_the_scheduling_horizon`
+  and nothing else.
+
+## See also
+
+- [../data/storage-record.md](../data/storage-record.md) — the record's field layout and invariants
+- [storage-api.md](storage-api.md) — the NVS blob store this module's shipped adapter calls
+- [../behavior/config-load-and-save.md](../behavior/config-load-and-save.md) — the load/save algorithm end to end
+- [updater-api.md](updater-api.md) — the consumer of `check_interval_ms`, and the owner of the horizon this module restates
+
 ### [behavior] Boot and Bring-Up
 *`behavior/boot-and-bring-up.md` - What runs from app_main to the main loop, in what order, and what happens when a step fails. - status: active - source: application/app/src/app.c:64-174, application/app/src/app.c:195-210 - keywords: app_main, app_run, print_banner, APP_GIT_COMMIT, bring_up_storage, bring_up_bsp, bring_up_updater, confirm_or_roll_back, on_updater_state, now_ms, APP_TICK_MS*
 
@@ -2408,65 +2663,120 @@ decision, which is what keeps this module in the middleware layer.
 - [update-cycle-fsm.md](update-cycle-fsm.md) — the state that will drive this
 
 ### [behavior] Config Load and Save
-*`behavior/config-load-and-save.md` - How the persisted record is validated on read and how a write avoids wearing the flash out. - status: active - source: middleware/storage/src/storage.c:103-174, middleware/storage/src/storage.c:176-207 - keywords: storage_record_load, storage_record_save, record_validate, record_crc, read-compare-write, nvs_set_blob, nvs_commit, esp_rom_crc32_le*
+*`behavior/config-load-and-save.md` - How the settings record is validated on read, how a write avoids wearing the flash out, and which module does which half. - status: active - source: middleware/cfg/src/cfg.c:56-133, middleware/cfg/src/cfg.c:238-290, middleware/storage/src/storage.c:83-151, application/app/src/app.c - keywords: cfg_init, cfg_save, cfg_defaults_set, record_validate, record_crc, cfg_store_load, cfg_store_save, storage_blob_load, storage_blob_save, read-compare-write, nvs_set_blob, nvs_commit, esp_rom_crc32_le*
 
 # Config Load and Save
 
-> Every read is validated before it is believed, and every write is skipped unless the bytes actually changed.
+> Every read is validated before it is believed, every write is skipped unless the bytes actually changed — and the module that validates is not the module that writes.
 
-## Load
+## Who does what
 
-1. Read the blob at the configured key into a local record.
-2. "Not found" is returned as such, distinctly from a failure — the caller uses
-   it to mean "first boot".
-3. Any other vendor failure is logged and converted.
-4. Validate: stored length, CRC, record version, and that the URL string is
-   NUL-terminated inside its buffer. See
-   [../data/storage-record.md](../data/storage-record.md) for the verdict table.
-5. Only on a clean verdict is the caller's output written. A failed validation
-   leaves the caller's buffer untouched.
+```mermaid
+flowchart LR
+    APP["application/app<br/>cfg_store_load / cfg_store_save"]
+    CFG["middleware/cfg<br/>shape, defaults, validation"]
+    ST["middleware/storage<br/>NVS blob, wear guard"]
+
+    CFG -- "load / save callback" --> APP
+    APP -- "storage_blob_load / _save" --> ST
+```
+
+`cfg` decides **what a setting may be**. `storage` decides **where the bytes
+go**. The two one-line wrappers in `application/app/src/app.c` are the only
+place in the image that knows both.
+
+## Load — `cfg_init()`
+
+1. Reject a NULL instance, a NULL adapter, or an adapter missing either
+   callback. Nothing is read.
+2. Call the adapter's `load` with a buffer of `sizeof(cfg_record_t)`.
+3. Sort the adapter's answer into two groups:
+   - `FW_ERR_NOT_FOUND` and `FW_ERR_CRC` are **normal** — nothing stored, or
+     bytes that did not check out at the storage layer.
+   - Anything else is the caller's problem: logged once here and returned
+     unchanged (R-LOG-04). The instance stays unusable, so every accessor
+     answers `FW_ERR_STATE`.
+4. On `FW_OK`, validate: stored length, CRC, record version, **both** strings
+   NUL-terminated inside their buffers, and `check_interval_ms` below the
+   scheduling horizon. See [../data/storage-record.md](../data/storage-record.md)
+   for the verdict table.
+5. A clean verdict installs the stored record. Any failure verdict logs which
+   one it was and installs `cfg_record_default()` instead — and **still returns
+   `FW_OK`**, because the instance is usable either way (R-CFG-02, R-CFG-03).
 
 The CRC covers every byte before the trailing CRC field, using the ROM CRC-32
 routine seeded with zero so the result is the standard CRC-32 of the buffer.
 
-## Save
+## The storage half of the load
 
-1. Copy the caller's record, then **overwrite** its version, length and CRC. The
-   caller cannot set them wrong.
-2. **Read back the current record and compare.** If the stored bytes already
-   equal what is about to be written, return success without touching flash.
-3. Otherwise write the blob and commit.
+`storage_blob_load()` adds nothing but the NVS call and one translation: NVS
+refuses to copy a blob bigger than the caller's buffer, and a blob of a length
+this build does not use is not one this build wrote — so it comes back as
+`FW_ERR_CRC`, which is the verdict that lands on step 3's "normal" side.
 
-Step 2 is what makes the function safe to call every cycle. NVS wear is measured
-in sector erases; the compare is cheap and the erase is not. Without it, a
-caller saving on every loop iteration wears a sector out in weeks.
+## Save — `cfg_save()`
+
+1. Overwrite `version`, `length` and `crc32` on the live record. A setter never
+   touches them, so they are always correct for whatever changed the record.
+2. Hand the whole record to the adapter's `save`.
+3. `storage_blob_save()` **reads the stored bytes back and compares.** If they
+   already equal what is about to be written, it returns success without
+   touching flash.
+4. Otherwise it writes the blob and commits.
+
+Step 3 is what makes the call safe to make every cycle. NVS wear is measured in
+sector erases; the compare is cheap and the erase is not. Its compare buffer is
+a fixed `STORAGE_BLOB_MAX` bytes, not a VLA sized from `len`.
 
 Power-fail safety is delegated: NVS commits the new copy before dropping the old
-one, so a cut here leaves the previous record readable. The module does not
-implement its own two-slot scheme.
+one, so a cut here leaves the previous record readable. Neither module
+implements a two-slot scheme of its own.
+
+## Set — the accessors
+
+A setter validates and assigns, and **writes nothing**. A caller that changes
+four settings pays for one flash write, and `cfg_defaults_set()` — the factory
+reset — is the same: RAM only, so a reboot before `cfg_save()` leaves the old
+record readable. `test_cfg_a_setter_never_writes_to_the_store` asserts that
+negative against a call-counting fake store.
+
+A refused value leaves the stored one in place. There is no partial assignment:
+a string setter checks the length before it copies a byte.
 
 ## Inputs → outputs
 
 | Reads | Produces |
 |-------|----------|
-| NVS blob at the configured namespace/key | A validated record, or a verdict |
-| The caller's record | A stamped, CRC-correct blob — or nothing, if unchanged |
+| NVS blob at the configured namespace/key | A validated record, or the compiled-in defaults plus a log line |
+| The live record | A stamped, CRC-correct blob — or nothing, if unchanged |
 
 ## Edge cases & error handling
 
 - A record written by a **newer** firmware (unknown version) is reported as
   "not found" rather than reinterpreted, so the device falls back to defaults
-  instead of guessing at a layout it does not know.
-- 🔴 **Open hole (code, not knowledge):** there is no migration. `record_validate()` carries the TODO. Today,
-  changing the struct silently costs every deployed unit its stored settings.
-- The compare in step 2 uses the load path, so a **damaged** stored record makes
-  the compare fail and the write proceed — which is the right repair behaviour.
-- Both calls block on flash and are not callable from an ISR.
+  instead of guessing at a layout it does not know. A record whose length
+  differs takes the same route via `FW_ERR_CRC`.
+- **A valid CRC is not sufficient.** An interval past the scheduling horizon
+  fails validation with `FW_ERR_PARAM` and the whole record is refused.
+  Before `cfg` existed this value reached `updater_init()` unchecked and
+  **failed bring-up**; now it falls back to the defaults.
+- 🔴 **Open hole (code, not knowledge):** there is no migration.
+  `record_validate()` carries the TODO. Today, changing the struct silently
+  costs every deployed unit its stored settings.
+- The compare in save step 3 uses the load path, so a **damaged** stored record
+  makes the compare fail and the write proceed — which is the right repair
+  behaviour.
+- ⚠ **Nothing in this firmware calls `cfg_save()` yet.** The record is read at
+  boot and never written, which is unchanged from before the refactor — the
+  linker drops `cfg_save` from the image for want of a caller. The first writer
+  will be whatever records `last_ok_fw_version` or `boot_fail_count`.
+- `cfg_init()` and `cfg_save()` block on flash and are not callable from an ISR.
 
 ## See also
 
+- [../interface/cfg-api.md](../interface/cfg-api.md) — the accessors and what each refuses
+- [../interface/storage-api.md](../interface/storage-api.md) — the blob contract underneath
 - [../data/storage-record.md](../data/storage-record.md) — the shape and its invariants
-- [../interface/storage-api.md](../interface/storage-api.md) — the contract
 
 ### [behavior] USB Host Flow
 *`behavior/usb-host-flow.md` - How a PC drives a 0xF001 unit over USB end to end, what each step proves, and which handlers hold the channel. - status: active - source: docs/scripts/tool-usb.py, middleware/command/src/command.c, middleware/command/src/command_upgrade.c, middleware/protocol/src/protocol.c - keywords: usb host flow, PING, VERSION, BOOT_SLOT, UPG_BEGIN, UPG_WRITE, UPG_END, RESTART_APP, tool-usb.py, chunk_max, blocking, time budget*

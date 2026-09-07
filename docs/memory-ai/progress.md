@@ -9,13 +9,13 @@ updated: 2026-09-07
 
 ## What works
 
-- The full three-layer tree exists with six modules, each with one public
-  header, one source file, and a component registration.
+- The full three-layer tree exists with ten modules, each with one public
+  header, at least one source file, and a component registration.
 - **Verified by execution:** the update-cycle state machine and the status-code
   lookup compile clean on host GCC under the house warning set with `-Werror`,
   and every behavioural assertion passes — including the 2^32 ms clock wrap, the
   scheduling horizon rejection, and the repeatable stop/deinit contract.
-- **Verified mechanically:** `clang-format` clean across all 24 sources; each
+- **Verified mechanically:** `clang-format` clean across all 43 sources; each
   symbol prefix declared in exactly one module directory; no upward include
   across a layer; no pin literal outside `driver/bsp/`; no source of ours under
   `workspace/`.
@@ -37,10 +37,10 @@ updated: 2026-09-07
 - The repo is published: 8 commits on `main`, `developing` and `release/v0.1`,
   with branch protection on the first two **verified by an actual rejected
   push**, not just by the API response.
-- A host test harness that actually runs: 13 Unity tests, green, built under the
-  firmware's own `-Werror` warning set. **Proven to have teeth** — breaking the
-  wrap-safe due check makes exactly one test go red, and restoring it makes the
-  suite green again.
+- A host test harness that actually runs: **69 Unity tests, green**, built under
+  the firmware's own `-Werror` warning set. **Proven to have teeth** — breaking
+  the wrap-safe due check makes exactly one test go red, and restoring it makes
+  the suite green again.
 - Static analysis at a clean baseline, verified by running it locally **and in
   the CI container**: `cppcheck` 0 findings, `clang-tidy` 0 findings, no secrets
   in the tree. One real finding (a parameter that could be `const`) was found
@@ -72,6 +72,23 @@ updated: 2026-09-07
 - **v0.1.0 is released**, cut end to end by `tool-release.py`: seven phases, two
   merged pull requests, an annotated tag on `main`, and eight published
   artifacts. Both workflows green on the runs that produced it.
+- **A settings library with a persistence seam, `middleware/cfg`.** It owns the
+  record, the defaults and one validated get/set pair per setting; where the
+  bytes go arrives as a two-callback adapter, so `cfg` names no storage
+  technology and `middleware/storage` shrank to an opaque NVS blob store. The
+  host suite went from 56 tests to **69, all green**, and one of the new ones
+  was **proved to have teeth by mutation**: deleting the
+  `CFG_CHECK_INTERVAL_MAX_MS` guard from the setter reddens exactly
+  `test_cfg_check_interval_refuses_the_scheduling_horizon` and nothing else.
+  Restoring it returns the suite to green.
+- **`cfg` is in the image, not just in the build.** Verified by reading
+  `app_updater.map`: `cfg_init`, `cfg_record_default` and
+  `cfg_check_interval_ms_get` carry real addresses, and `app_updater.bin` grew
+  from 0x3a820 to 0x3ac20 when `app` started requiring the component.
+- **`driver/bsp` has a per-chip port.** The silicon-fixed USB and console pins
+  left `bsp.h` for `src/port/bsp_esp32s3.c`, which reads them from the chip's
+  own `soc/` headers; `driver/bsp/CMakeLists.txt` selects the port by
+  `IDF_TARGET` and refuses with an instruction when a target has none.
 
 ## What's left
 
@@ -88,7 +105,8 @@ updated: 2026-09-07
 6. **Flash and boot v0.1.0 on real hardware.** Nothing has ever executed on a
    board, so everything about the flash layout is still arithmetic.
 7. An **on-target** smoke test. The host suite runs; nothing exercises a board.
-8. Record migration in `storage`, before any field release.
+8. Record migration in `middleware/cfg` (`record_validate()` carries the
+   TODO), before any field release.
 9. Enable `gcc -fanalyzer` — deferred on purpose, not forgotten. The trigger is
    the first code that does buffer arithmetic, parsing, or allocation; see
    [rule/static-analysis.md](rule/static-analysis.md) for the exact list and the
@@ -124,3 +142,14 @@ updated: 2026-09-07
 - ⚠ The first build may fail on `-Wconversion`/`-Werror` in SDK macros expanded
   inside our translation units. That is the rule working; fix at the call site,
   never by silencing the warning.
+
+- ⚠ **Nothing in the firmware calls `cfg_save()`.** Settings are read at boot
+  and never written — unchanged from before the refactor, when
+  `storage_record_save()` had no caller either — so the linker drops
+  `cfg_save` from the image. The API and its tests exist; the first writer will
+  be whatever records `last_ok_fw_version` or `boot_fail_count`. Until then a
+  setting changed at runtime is lost on reset.
+- ⚠ `application/updater/CMakeLists.txt` still declares `PRIV_REQUIRES ...
+  storage`, but `updater.c` includes no header of it. A dead dependency, found
+  while wiring `cfg` and deliberately left alone: removing it is not this
+  change's business.

@@ -33,7 +33,8 @@ before anyone opens a header.
 | `middleware/ota_http/` | Fetches an image over HTTPS and hands it out chunk by chunk. |
 | `middleware/protocol/` | The USB wire format: frame codec, status codes, opcode map. |
 | `middleware/command/` | Dispatches a decoded USB frame to the handler that serves it. |
-| `middleware/storage/` | The persisted settings/boot record in NVS. |
+| `middleware/cfg/` | The device's settings: the record, its defaults, and one validated get/set pair per setting. Persistence arrives as an adapter. |
+| `middleware/storage/` | One opaque blob in NVS. Knows nothing about what is in it. |
 | `driver/bsp/` | Pin map, clock, flash geometry. The only place a pin number appears, and the only module with a per-chip port. |
 | `driver/usb_cdc/` | The CDC-ACM byte pipe on USB-OTG. Owns the TinyUSB stack. |
 | `workspace/0xF001/` | Build entry for product 0xF001: CMakeLists, sdkconfig.defaults, partitions.csv. |
@@ -62,13 +63,13 @@ Every directory under the three layer directories has the same inside:
 | `src/<mod>.c` | Implementation. |
 | `src/<mod>_priv.h` | Internal declarations. Present only where something is actually shared: `application/app/`, `middleware/command/` and `driver/bsp/`. |
 | `src/port/<mod>_<target>.c` | The per-chip half of a module, one file per MCU family, picked by `IDF_TARGET` (R-LIB-02). Present only in `driver/bsp/`. |
-| `test/test_<mod>.c` | Host tests, present for `fw`, `updater`, `protocol` and `command`. Each function must also be listed in `test/host/runner.c` or it never runs. |
+| `test/test_<mod>.c` | Host tests, present for `fw`, `updater`, `protocol`, `command` and `cfg`. Each function must also be listed in `test/host/runner.c` or it never runs. |
 | `CMakeLists.txt` | ESP-IDF component registration. |
 
 The directory name, the public header name, and the symbol prefix are the same
 word, so one grep for the prefix finds the folder, the file and every symbol in
 it. Verified: each of `app`, `updater`, `fw`, `ota_http`, `protocol`, `command`,
-`storage`, `bsp`, `usb_cdc` is declared in exactly one module directory.
+`cfg`, `storage`, `bsp`, `usb_cdc` is declared in exactly one module directory.
 
 `middleware/command/` has two sources - `command.c` for the dispatch and the
 stateless handlers, `command_upgrade.c` for the image transfer session - which

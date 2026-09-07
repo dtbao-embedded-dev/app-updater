@@ -53,9 +53,18 @@ jobs:
           build="workspace/0xF001/build"
           mkdir -p dist
 
-          # Provisioning a blank board. The name comes from VERSION via
-          # `tool-esp.py merge`, and the tag gate above proved they agree.
-          cp "$build/app-updater-${GITHUB_REF_NAME}-factory.bin" dist/
+          # Provisioning a blank board. `tool-esp.py merge` builds the name
+          # from the project() token, the workspace and today's date, so this
+          # step cannot spell it out in advance - it matches the shape and
+          # insists on finding exactly one. A glob that silently matched none
+          # would ship a release missing the only asset that can flash a blank
+          # board, which is the v0.1.0 defect all over again.
+          factory=$(ls "$build"/bl_*.bin 2>/dev/null | wc -l)
+          if [ "$factory" -ne 1 ]; then
+            echo "::error::expected exactly one $build/bl_*.bin, found $factory"
+            exit 1
+          fi
+          cp "$build"/bl_*.bin dist/
           cp "$build/bootloader/bootloader.bin"                  dist/
           cp "$build/partition_table/partition-table.bin"        dist/
           # v0.1.0 shipped without this and its own flash_args asked for it, so

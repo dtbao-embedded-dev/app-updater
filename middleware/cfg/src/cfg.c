@@ -310,6 +310,11 @@ static fw_err_t string_set(char *field, size_t field_size, const char *in, bool 
      * a stale tail would make two records holding the same settings compare
      * unequal and cost a flash write the adapter would otherwise skip. */
     (void)memset(field, 0, field_size);
+    /* R-SAN-02, the reason this one is suppressed: the result IS terminated.
+     * `len >= field_size` was refused above, so len is at most
+     * field_size - 1, and the memset on the line before leaves a zero at every
+     * byte this copy does not reach. The check sees the memcpy alone. */
+    /* NOLINTNEXTLINE(bugprone-not-null-terminated-result) */
     (void)memcpy(field, in, len);
     return FW_OK;
 }

@@ -13,20 +13,30 @@
 #include "app_priv.h"
 #include "bsp.h"
 #include "cfg.h"
-#include "command.h"
+#include "fw_config.h"
 #include "ota.h"
-#include "protocol.h"
 #include "storage.h"
-#include "updater.h"
+
+#if FW_FEATURE_USB_COMMAND
+#include "command.h"
+#include "protocol.h"
 #include "usb_cdc.h"
+#endif
+
+#if FW_FEATURE_UPDATER
+#include "updater.h"
+#endif
 
 #include "esp_app_desc.h"
 #include "esp_chip_info.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/stream_buffer.h"
 #include "freertos/task.h"
+
+#if FW_FEATURE_USB_COMMAND
+#include "freertos/stream_buffer.h"
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,6 +53,8 @@
 #define APP_GIT_COMMIT "unknown"
 #endif
 
+#if FW_FEATURE_USB_COMMAND
+
 /* Bytes buffered between the USB service task and the dispatch task. The CDC
  * RX FIFO is 512 and the protocol is synchronous - a host sends one command and
  * waits - so this only has to absorb one frame arriving faster than the parser
@@ -57,6 +69,8 @@
 #define APP_USB_TASK_STACK 4096U
 #define APP_USB_TASK_PRIO  5U
 
+#endif /* FW_FEATURE_USB_COMMAND */
+
 /* ---------------------------- Private types ---------------------------- */
 
 /** Everything the application owns, in one struct passed down at init
@@ -64,12 +78,16 @@
 typedef struct {
     bsp_t bsp;
     storage_t storage;
-    updater_t updater;
     cfg_t cfg;
+#if FW_FEATURE_UPDATER
+    updater_t updater;
+#endif
+#if FW_FEATURE_USB_COMMAND
     usb_cdc_t usb;
     command_t command;
     protocol_parser_t parser;
     StreamBufferHandle_t usb_rx;
+#endif
 } app_ctx_t;
 
 /* ----------------------------- Static data ----------------------------- */
@@ -86,18 +104,24 @@ static app_ctx_t s_ctx;
 static void print_banner(void);
 static fw_err_t bring_up_storage(app_ctx_t *ctx);
 static fw_err_t bring_up_bsp(app_ctx_t *ctx);
-static fw_err_t bring_up_updater(app_ctx_t *ctx);
-static fw_err_t bring_up_usb(app_ctx_t *ctx);
 static fw_err_t cfg_store_load(void *ctx, void *out, size_t cap, size_t *out_len);
 static fw_err_t cfg_store_save(void *ctx, const void *data, size_t len);
 static fw_err_t from_storage_err(storage_err_t err);
+static void confirm_or_roll_back(void);
+
+#if FW_FEATURE_UPDATER
+static fw_err_t bring_up_updater(app_ctx_t *ctx);
+static void on_updater_state(void *ctx, updater_state_t state);
+static uint32_t now_ms(void);
+#endif
+
+#if FW_FEATURE_USB_COMMAND
+static fw_err_t bring_up_usb(app_ctx_t *ctx);
 static void on_usb_rx(void *ctx, const uint8_t *data, size_t len);
 static fw_err_t on_usb_reply(void *ctx, const uint8_t *data, size_t len);
 static bool is_slot_write_busy(void *ctx);
 static void usb_dispatch_task(void *arg);
-static void confirm_or_roll_back(void);
-static void on_updater_state(void *ctx, updater_state_t state);
-static uint32_t now_ms(void);
+#endif
 
 /* -------------------------- Public functions --------------------------- */
 
@@ -124,12 +148,15 @@ fw_err_t app_run(void) {
         return err;
     }
 
+#if FW_FEATURE_UPDATER
     err = bring_up_updater(&s_ctx);
     if (err != FW_OK) {
         ESP_LOGE(TAG, "updater bring-up failed: %s", fw_err_str(err));
         return err;
     }
+#endif
 
+#if FW_FEATURE_USB_COMMAND
     /* USB last, and deliberately after the updater: the very first frame may
      * be an UPG_BEGIN, whose refusal depends on asking the update cycle
      * whether it is already writing the slot. A channel that answered before
@@ -139,14 +166,20 @@ fw_err_t app_run(void) {
         ESP_LOGE(TAG, "usb bring-up failed: %s", fw_err_str(err));
         return err;
     }
+#endif
 
+    /* The loop runs whatever is switched on. With both features off it is a
+     * unit that boots, confirms its image and idles - which is still a
+     * complete product, just not a self-updating one. */
     for (;;) {
+#if FW_FEATURE_UPDATER
         const fw_err_t step_err = updater_step(&s_ctx.updater, now_ms());
         if (step_err != FW_OK) {
             /* Logged once, here, by the layer that decides what to do about it
              * (R-LOG-04). The cycle carries its own retry budget. */
             ESP_LOGW(TAG, "update step: %s", fw_err_str(step_err));
         }
+#endif
         vTaskDelay(pdMS_TO_TICKS(APP_TICK_MS));
     }
 }
@@ -262,6 +295,8 @@ static fw_err_t bring_up_bsp(app_ctx_t *ctx) {
     return FW_OK;
 }
 
+#if FW_FEATURE_UPDATER
+
 static fw_err_t bring_up_updater(app_ctx_t *ctx) {
     uint32_t interval_ms = 0U;
     fw_err_t err         = cfg_check_interval_ms_get(&ctx->cfg, &interval_ms);
@@ -286,9 +321,15 @@ static fw_err_t bring_up_updater(app_ctx_t *ctx) {
     return updater_start(&ctx->updater, now_ms());
 }
 
+#endif /* FW_FEATURE_UPDATER */
+
 /* R-VER-08: a new image gets exactly one boot to prove itself. Without this
  * call the bootloader reverts on the next reset, which is the safe default but
- * makes every good update look like a failed one. */
+ * makes every good update look like a failed one.
+ *
+ * Deliberately outside FW_FEATURE_UPDATER: a unit that cannot fetch its own
+ * updates still has to confirm the image it was given, or the bootloader
+ * reverts it on the next reset. */
 static void confirm_or_roll_back(void) {
     bool is_pending      = false;
     const ota_err_t read = ota_pending_verify_is(&is_pending);
@@ -311,6 +352,8 @@ static void confirm_or_roll_back(void) {
     }
 }
 
+#if FW_FEATURE_UPDATER
+
 static void on_updater_state(void *ctx, updater_state_t state) {
     app_ctx_t *app = (app_ctx_t *)ctx;
 
@@ -321,12 +364,22 @@ static void on_updater_state(void *ctx, updater_state_t state) {
     }
 }
 
+/* esp_timer_get_time() is monotonic from boot and keeps running in light
+ * sleep, which is what the update schedule needs. */
+static uint32_t now_ms(void) {
+    return (uint32_t)(esp_timer_get_time() / 1000);
+}
+
+#endif /* FW_FEATURE_UPDATER */
+
 /* The command channel, in three parts: a byte pipe the USB task fills, a task
  * that drains it into the parser, and the dispatcher the parser feeds.
  *
  * Bringing the stack up claims the chip's single internal USB PHY for USB-OTG,
  * which turns USB-Serial-JTAG off - so the console is on UART0 by the time this
  * runs (see workspace/0xF001/sdkconfig.defaults). */
+#if FW_FEATURE_USB_COMMAND
+
 static fw_err_t bring_up_usb(app_ctx_t *ctx) {
     protocol_parser_reset(&ctx->parser);
 
@@ -398,6 +451,7 @@ static fw_err_t on_usb_reply(void *ctx, const uint8_t *data, size_t len) {
  * because the dispatcher lives below this layer and may not include
  * updater.h. */
 static bool is_slot_write_busy(void *ctx) {
+#if FW_FEATURE_UPDATER
     const app_ctx_t *app  = (const app_ctx_t *)ctx;
     updater_state_t state = UPDATER_STATE_IDLE;
 
@@ -407,6 +461,13 @@ static bool is_slot_write_busy(void *ctx) {
         return true;
     }
     return (state == UPDATER_STATE_CHECKING) || (state == UPDATER_STATE_DOWNLOADING);
+#else
+    /* With the update cycle compiled out, USB is the only writer of a slot,
+     * so there is nobody to yield to. Answering "busy" here would refuse
+     * every transfer on a build whose only way in is this channel. */
+    (void)ctx;
+    return false;
+#endif
 }
 
 /* Parsing and dispatch happen here, never in the USB callback: a handler may
@@ -431,10 +492,6 @@ static void usb_dispatch_task(void *arg) {
     }
 }
 
-/* esp_timer_get_time() is monotonic from boot and keeps running in light
- * sleep, which is what the update schedule needs. */
-static uint32_t now_ms(void) {
-    return (uint32_t)(esp_timer_get_time() / 1000);
-}
+#endif /* FW_FEATURE_USB_COMMAND */
 
 /*** end of file ***/

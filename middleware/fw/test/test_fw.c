@@ -97,7 +97,7 @@ void test_fw_crc32_chains_across_two_buffers(void) {
 void test_fw_crc32_agrees_with_an_independent_implementation(void) {
     uint8_t buf[256];
     for (size_t i = 0; i < sizeof(buf); ++i) {
-        buf[i] = (uint8_t)(i * 7U + 13U);
+        buf[i] = (uint8_t)((i * 7U) + 13U);
     }
 
     for (uint32_t len = 0U; len <= (uint32_t)sizeof(buf); ++len) {

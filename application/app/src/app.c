@@ -14,6 +14,7 @@
 #include "bsp.h"
 #include "cfg.h"
 #include "command.h"
+#include "ota.h"
 #include "protocol.h"
 #include "storage.h"
 #include "updater.h"
@@ -23,8 +24,6 @@
 #include "esp_chip_info.h"
 #include "esp_log.h"
 #include "esp_mac.h"
-#include "esp_ota_ops.h"
-#include "esp_partition.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/stream_buffer.h"
@@ -291,13 +290,13 @@ static fw_err_t bring_up_updater(app_ctx_t *ctx) {
  * call the bootloader reverts on the next reset, which is the safe default but
  * makes every good update look like a failed one. */
 static void confirm_or_roll_back(void) {
-    const esp_partition_t *running = esp_ota_get_running_partition();
-    esp_ota_img_states_t state;
-
-    if (esp_ota_get_state_partition(running, &state) != ESP_OK) {
+    bool is_pending      = false;
+    const ota_err_t read = ota_pending_verify_is(&is_pending);
+    if (read != OTA_OK) {
+        ESP_LOGW(TAG, "boot state: %s", ota_err_str(read));
         return;
     }
-    if (state != ESP_OTA_IMG_PENDING_VERIFY) {
+    if (!is_pending) {
         return;
     }
 
@@ -306,7 +305,10 @@ static void confirm_or_roll_back(void) {
      * An image that can confirm itself while broken defeats the rollback this
      * firmware exists to provide. */
     ESP_LOGW(TAG, "pending verify: confirming without a self-test (TODO)");
-    (void)esp_ota_mark_app_valid_cancel_rollback();
+    const ota_err_t err = ota_mark_valid();
+    if (err != OTA_OK) {
+        ESP_LOGE(TAG, "confirm image: %s", ota_err_str(err));
+    }
 }
 
 static void on_updater_state(void *ctx, updater_state_t state) {

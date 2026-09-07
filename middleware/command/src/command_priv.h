@@ -14,8 +14,6 @@
 #include "command.h"
 #include "protocol.h"
 
-#include "esp_partition.h"
-
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -24,18 +22,13 @@ extern "C" {
 
 /* ------------------------ Public function prototypes ------------------- */
 
-/**
- * @brief   Resolves a wire slot number to the partition it names.
- * @param   slot   `PROTOCOL_SLOT_UPDATER` (0) or `PROTOCOL_SLOT_FIRMWARE` (1)
- * @return  The partition, or NULL when this build has no such slot.
- * @note    Shared across the module's sources rather than duplicated, because
- *          `BOOT_SLOT` and `UPG_BEGIN`'s `target` carry the same encoding and
- *          two copies of that mapping is one that drifts. Any value other than
- *          1 resolves to the updater slot, so callers validate the byte first.
- *          Not installed: the encoding is the module's business, not its
- *          callers'.
+/*
+ * There is no slot-to-partition helper here any more. `BOOT_SLOT` and
+ * `UPG_BEGIN`'s `target` carry the same numbering `driver/ota` indexes its
+ * slots by, so the wire byte is handed straight to the driver and the mapping
+ * lives in exactly one place - inside the driver, where the partition table
+ * is.
  */
-const esp_partition_t *command_slot_partition(uint8_t slot);
 
 /**
  * @brief   Opens a transfer, discarding whichever one was already open.

@@ -14,12 +14,9 @@
 
 #include "command_priv.h"
 
-#include "esp_app_desc.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_mac.h"
-#include "esp_ota_ops.h"
-#include "esp_partition.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -47,7 +44,6 @@ static protocol_status_t handle_get_mac(esp_mac_type_t type, uint8_t *payload,
                                         uint32_t *payload_len);
 static fw_err_t reply(command_t *cmd, uint32_t command, protocol_status_t status,
                       const uint8_t *payload, uint32_t payload_len);
-static void copy_field(uint8_t *dst, uint32_t cap, const char *src);
 
 /* -------------------------- Public functions --------------------------- */
 
@@ -74,7 +70,7 @@ fw_err_t command_deinit(command_t *cmd) {
      * transfer is thrown away rather than finalised: a slot half written is a
      * slot nothing should boot, and only UPG_END makes one bootable. */
     if (cmd->is_init && cmd->upgrade.is_open) {
-        (void)esp_ota_abort((esp_ota_handle_t)cmd->upgrade.ota_handle);
+        (void)ota_session_abort(cmd->upgrade.session);
     }
     memset(cmd, 0, sizeof(*cmd));
     return FW_OK;
@@ -201,14 +197,13 @@ static protocol_status_t handle_set_boot_slot(const protocol_req_t *req) {
         return PROTOCOL_ERR_BAD_ARG;
     }
 
-    const esp_partition_t *part = command_slot_partition(slot);
-    if (part == NULL) {
+    const ota_err_t err = ota_boot_slot_set(slot);
+    if (err == OTA_ERR_NOT_FOUND) {
+        /* This build has no such slot, so the request is what is wrong. */
         return PROTOCOL_ERR_BAD_ARG;
     }
-
-    const esp_err_t err = esp_ota_set_boot_partition(part);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "arm slot %u failed: esp_err=0x%x", (unsigned)slot, (unsigned)err);
+    if (err != OTA_OK) {
+        ESP_LOGW(TAG, "arm slot %u: %s", (unsigned)slot, ota_err_str(err));
         /* A slot whose image does not validate is a state a host can fix by
          * transferring one, so it is retryable (-5) rather than broken (-6). */
         return PROTOCOL_ERR_STATE;
@@ -221,39 +216,29 @@ static protocol_status_t handle_set_boot_slot(const protocol_req_t *req) {
  * reads back as sixteen zero bytes with PROTOCOL_OK: "unset" is an answer, not
  * a failure, so a host needs no second command to tell them apart. */
 static protocol_status_t handle_get_version(uint8_t *payload, uint32_t *payload_len) {
-    const esp_app_desc_t *self = esp_app_get_description();
-    if (self != NULL) {
-        copy_field(&payload[0], PROTOCOL_VERSION_FIELD_LEN, self->version);
-    }
-
-    const esp_partition_t *fw = command_slot_partition(PROTOCOL_SLOT_FIRMWARE);
-    esp_app_desc_t desc;
-    if ((fw != NULL) && (esp_ota_get_partition_description(fw, &desc) == ESP_OK)) {
-        copy_field(&payload[PROTOCOL_VERSION_FIELD_LEN], PROTOCOL_VERSION_FIELD_LEN, desc.version);
-    }
+    /* Each write is bounded by the field width and the caller zeroed the
+     * payload, so a slot the driver cannot read stays sixteen zero bytes -
+     * which is the "unset" answer this handler is documented to give. */
+    (void)ota_running_version_get((char *)&payload[0], PROTOCOL_VERSION_FIELD_LEN);
+    (void)ota_slot_version_get(PROTOCOL_SLOT_FIRMWARE, (char *)&payload[PROTOCOL_VERSION_FIELD_LEN],
+                               PROTOCOL_VERSION_FIELD_LEN);
 
     *payload_len = PROTOCOL_VERSION_LEN;
     return PROTOCOL_OK;
 }
 
+/* The wire numbers the slots the way `driver/ota` indexes them, so the answer
+ * is the driver's slot number with nothing translated - two encodings for one
+ * pair of slots is a bug waiting to happen. */
 static protocol_status_t handle_get_boot_slot(uint8_t *payload, uint32_t *payload_len) {
-    const esp_partition_t *running = esp_ota_get_running_partition();
-    if (running == NULL) {
+    uint8_t slot        = 0U;
+    const ota_err_t err = ota_running_slot_get(&slot);
+    if (err != OTA_OK) {
+        ESP_LOGE(TAG, "running slot: %s", ota_err_str(err));
         return PROTOCOL_ERR_HW;
     }
 
-    if (running->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0) {
-        payload[0] = (uint8_t)PROTOCOL_SLOT_UPDATER;
-    } else if (running->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_1) {
-        payload[0] = (uint8_t)PROTOCOL_SLOT_FIRMWARE;
-    } else {
-        /* Neither OTA slot: the bootloader started something this map cannot
-         * name, which no partitions.csv in this repo produces. */
-        ESP_LOGE(TAG, "running partition subtype 0x%02X is neither ota slot",
-                 (unsigned)running->subtype);
-        return PROTOCOL_ERR_HW;
-    }
-
+    payload[0]   = slot;
     *payload_len = 1U;
     return PROTOCOL_OK;
 }
@@ -295,29 +280,6 @@ static fw_err_t reply(command_t *cmd, uint32_t command, protocol_status_t status
     }
 
     return cmd->cfg.on_reply(cmd->cfg.reply_ctx, cmd->frame, (size_t)len);
-}
-
-/* Bounded copy into a fixed field the caller has already zeroed, so the NUL is
- * already in place. Hand-rolled rather than strncpy to keep the truncation
- * explicit instead of arguing with -Wstringop-truncation about it. */
-static void copy_field(uint8_t *dst, uint32_t cap, const char *src) {
-    if ((src == NULL) || (cap == 0U)) {
-        return;
-    }
-    for (uint32_t i = 0; (i < (cap - 1U)) && (src[i] != '\0'); ++i) {
-        dst[i] = (uint8_t)src[i];
-    }
-}
-
-/* Slot 1 is app_firmware (ota_1) and slot 0 is app_updater (ota_0), the same
- * encoding BOOT_SLOT and UPG_BEGIN's `target` share - two encodings for one
- * pair of slots is a bug waiting to happen. */
-const esp_partition_t *command_slot_partition(uint8_t slot) {
-    const esp_partition_subtype_t subtype = (slot == PROTOCOL_SLOT_FIRMWARE)
-                                                ? ESP_PARTITION_SUBTYPE_APP_OTA_1
-                                                : ESP_PARTITION_SUBTYPE_APP_OTA_0;
-
-    return esp_partition_find_first(ESP_PARTITION_TYPE_APP, subtype, NULL);
 }
 
 /*** end of file ***/

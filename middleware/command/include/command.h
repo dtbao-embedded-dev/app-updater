@@ -18,6 +18,7 @@
 #include <stdint.h>
 
 #include "fw.h"
+#include "ota.h"
 #include "protocol.h"
 
 #ifdef __cplusplus
@@ -72,9 +73,9 @@ typedef struct {
  * @brief   One in-flight image transfer.
  *
  * The fields are the module's business; they sit in the public struct only
- * because the caller allocates the instance. `ota_handle` keeps the vendor
- * handle as a plain word so no SDK type reaches this header (R-LAY-03), the
- * same trick `storage_t` uses for its NVS handle.
+ * because the caller allocates the instance. `session` is the driver's own
+ * opaque type, so no SDK type reaches this header (R-LAY-03) and no caller has
+ * anything to do with the value but hand it back.
  *
  * There is no abort opcode, so a session ends exactly three ways: UPG_END
  * finalises it, the next UPG_BEGIN throws it away, or a reboot forgets it. All
@@ -82,14 +83,14 @@ typedef struct {
  * after the whole-image CRC matches, touches anything a bootloader reads.
  */
 typedef struct {
-    bool is_open;        /**< A transfer is in progress.                     */
-    uint8_t target;      /**< Slot being written, PROTOCOL_SLOT_*.           */
-    uint32_t img_size;   /**< Total image bytes the host declared.           */
-    uint32_t img_crc32;  /**< CRC-32 the finished image must match.          */
-    uint32_t chunk_max;  /**< Accepted chunk size, enforced on every write.  */
-    uint32_t written;    /**< Bytes written, and the next offset expected.   */
-    uint32_t crc;        /**< Running CRC-32 over what has been written.     */
-    uint32_t ota_handle; /**< Vendor handle, opaque here (R-LAY-03).         */
+    bool is_open;          /**< A transfer is in progress.                   */
+    uint8_t target;        /**< Slot being written, PROTOCOL_SLOT_*.         */
+    uint32_t img_size;     /**< Total image bytes the host declared.         */
+    uint32_t img_crc32;    /**< CRC-32 the finished image must match.        */
+    uint32_t chunk_max;    /**< Accepted chunk size, enforced every write.   */
+    uint32_t written;      /**< Bytes written, and the next offset expected. */
+    uint32_t crc;          /**< Running CRC-32 over what has been written.   */
+    ota_session_t session; /**< The open write session, opaque here.         */
 } command_upgrade_t;
 
 /**

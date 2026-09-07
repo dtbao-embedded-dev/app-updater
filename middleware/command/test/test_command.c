@@ -14,8 +14,8 @@
 #include "protocol.h"
 
 #include "esp_fake.h"
-#include "esp_partition.h"
 #include "esp_rom_crc.h"
+#include "ota_fake.h"
 
 #include <string.h>
 
@@ -177,7 +177,7 @@ void test_command_checks_length_before_it_checks_value(void) {
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_BAD_ARG, reply_status());
 
     /* Nothing was armed by either refusal. */
-    TEST_ASSERT_EQUAL_INT(0, (int)esp_fake_boot_slot_armed());
+    TEST_ASSERT_EQUAL_INT(-1, ota_fake_boot_slot_armed());
 
     TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_SET_BOOT_SLOT, good, 1U));
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
@@ -248,8 +248,8 @@ void test_command_restart_app_replies_before_it_resets(void) {
  * source spec calls BL2 - and [16:32] is the app_firmware slot. */
 void test_command_version_reports_the_updater_then_the_firmware(void) {
     setup();
-    esp_fake_set_self_version("0.1.0");
-    esp_fake_set_slot_version(ESP_PARTITION_SUBTYPE_APP_OTA_1, "2.4.0");
+    ota_fake_set_running_version("0.1.0");
+    ota_fake_set_slot_version(PROTOCOL_SLOT_FIRMWARE, "2.4.0");
 
     TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_GET_VERSION, NULL, 0U));
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
@@ -265,7 +265,7 @@ void test_command_version_zeroes_a_slot_that_holds_no_image(void) {
     static const uint8_t zeros[PROTOCOL_VERSION_FIELD_LEN] = {0};
 
     setup();
-    esp_fake_set_slot_version(ESP_PARTITION_SUBTYPE_APP_OTA_1, NULL);
+    ota_fake_set_slot_version(PROTOCOL_SLOT_FIRMWARE, NULL);
 
     TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_GET_VERSION, NULL, 0U));
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
@@ -277,13 +277,13 @@ void test_command_version_zeroes_a_slot_that_holds_no_image(void) {
 void test_command_get_boot_slot_reports_the_running_slot(void) {
     setup();
 
-    esp_fake_set_running_slot(ESP_PARTITION_SUBTYPE_APP_OTA_0);
+    ota_fake_set_running_slot(PROTOCOL_SLOT_UPDATER);
     TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_GET_BOOT_SLOT, NULL, 0U));
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
     TEST_ASSERT_EQUAL_UINT32(1U, reply_payload_len());
     TEST_ASSERT_EQUAL_HEX8(PROTOCOL_SLOT_UPDATER, reply_payload()[0]);
 
-    esp_fake_set_running_slot(ESP_PARTITION_SUBTYPE_APP_OTA_1);
+    ota_fake_set_running_slot(PROTOCOL_SLOT_FIRMWARE);
     TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_GET_BOOT_SLOT, NULL, 0U));
     TEST_ASSERT_EQUAL_HEX8(PROTOCOL_SLOT_FIRMWARE, reply_payload()[0]);
 }
@@ -299,10 +299,10 @@ void test_command_set_boot_slot_arms_the_slot_it_names(void) {
 
     TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_SET_BOOT_SLOT, to_firmware, 1U));
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
-    TEST_ASSERT_EQUAL_INT(ESP_PARTITION_SUBTYPE_APP_OTA_1, (int)esp_fake_boot_slot_armed());
+    TEST_ASSERT_EQUAL_INT(PROTOCOL_SLOT_FIRMWARE, ota_fake_boot_slot_armed());
 
     TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_SET_BOOT_SLOT, to_updater, 1U));
-    TEST_ASSERT_EQUAL_INT(ESP_PARTITION_SUBTYPE_APP_OTA_0, (int)esp_fake_boot_slot_armed());
+    TEST_ASSERT_EQUAL_INT(PROTOCOL_SLOT_UPDATER, ota_fake_boot_slot_armed());
 
     /* A Get right after a Set still reads the slot running now, not the armed
      * one - correct, and the reason a tool must say "will boot X after
@@ -317,11 +317,11 @@ void test_command_set_boot_slot_refuses_a_slot_with_no_valid_image(void) {
     static const uint8_t to_firmware[] = {PROTOCOL_SLOT_FIRMWARE};
 
     setup();
-    esp_fake_fail_set_boot(ESP_ERR_OTA_VALIDATE_FAILED);
+    ota_fake_fail_boot_slot_set(OTA_ERR_STATE);
 
     TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_SET_BOOT_SLOT, to_firmware, 1U));
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_STATE, reply_status());
-    TEST_ASSERT_EQUAL_INT(0, (int)esp_fake_boot_slot_armed());
+    TEST_ASSERT_EQUAL_INT(-1, ota_fake_boot_slot_armed());
 }
 
 /* Both MACs come from eFuse, so this product answers them with no radio and no
@@ -397,7 +397,7 @@ void test_command_upgrade_refuses_a_chunk_size_outside_the_band(void) {
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_BAD_ARG, reply_status());
 
     /* Not one erase between them. */
-    TEST_ASSERT_EQUAL_UINT32(0U, esp_fake_ota_begin_count());
+    TEST_ASSERT_EQUAL_UINT32(0U, ota_fake_begin_count());
 }
 
 void test_command_upgrade_accepts_both_ends_of_the_chunk_band(void) {
@@ -413,18 +413,18 @@ void test_command_upgrade_accepts_both_ends_of_the_chunk_band(void) {
 
     /* Two sessions opened, and only the second is still open - the first was
      * discarded rather than leaked. */
-    TEST_ASSERT_EQUAL_UINT32(2U, esp_fake_ota_begin_count());
-    TEST_ASSERT_EQUAL_UINT32(1U, esp_fake_ota_open_sessions());
+    TEST_ASSERT_EQUAL_UINT32(2U, ota_fake_begin_count());
+    TEST_ASSERT_EQUAL_UINT32(1U, ota_fake_open_sessions());
 }
 
 /* The host learns immediately, instead of after minutes of writing. */
 void test_command_upgrade_refuses_an_image_that_does_not_fit_before_erasing(void) {
     setup();
-    esp_fake_set_slot_size(ESP_PARTITION_SUBTYPE_APP_OTA_1, 0x100000U);
+    ota_fake_set_slot_size(PROTOCOL_SLOT_FIRMWARE, 0x100000U);
 
     TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_FIRMWARE, 0x100001U, 0U, 4096U));
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_BAD_ARG, reply_status());
-    TEST_ASSERT_EQUAL_UINT32(0U, esp_fake_ota_begin_count());
+    TEST_ASSERT_EQUAL_UINT32(0U, ota_fake_begin_count());
 
     /* Exactly the slot size still fits. */
     TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_FIRMWARE, 0x100000U, 0U, 4096U));
@@ -441,15 +441,15 @@ void test_command_upgrade_refuses_an_image_that_does_not_fit_before_erasing(void
 void test_command_upgrade_refuses_the_running_slot(void) {
     setup();
 
-    esp_fake_set_running_slot(ESP_PARTITION_SUBTYPE_APP_OTA_0);
+    ota_fake_set_running_slot(PROTOCOL_SLOT_UPDATER);
     TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_UPDATER, 4096U, 0U, 4096U));
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_STATE, reply_status());
 
-    esp_fake_set_running_slot(ESP_PARTITION_SUBTYPE_APP_OTA_1);
+    ota_fake_set_running_slot(PROTOCOL_SLOT_FIRMWARE);
     TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_FIRMWARE, 4096U, 0U, 4096U));
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_STATE, reply_status());
 
-    TEST_ASSERT_EQUAL_UINT32(0U, esp_fake_ota_begin_count());
+    TEST_ASSERT_EQUAL_UINT32(0U, ota_fake_begin_count());
 }
 
 void test_command_upgrade_refuses_an_unknown_target(void) {
@@ -457,7 +457,7 @@ void test_command_upgrade_refuses_an_unknown_target(void) {
 
     TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(2U, 4096U, 0U, 4096U));
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_BAD_ARG, reply_status());
-    TEST_ASSERT_EQUAL_UINT32(0U, esp_fake_ota_begin_count());
+    TEST_ASSERT_EQUAL_UINT32(0U, ota_fake_begin_count());
 }
 
 void test_command_upgrade_refuses_a_write_with_no_session(void) {
@@ -490,7 +490,7 @@ void test_command_upgrade_refuses_an_offset_out_of_order(void) {
     /* Re-sending what already landed is just as much out of order. */
     TEST_ASSERT_EQUAL_INT(FW_OK, send_write(0U, s_image, 4096U));
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_STATE, reply_status());
-    TEST_ASSERT_EQUAL_UINT32(4096U, esp_fake_ota_written());
+    TEST_ASSERT_EQUAL_UINT32(4096U, ota_fake_written());
 }
 
 /* Every chunk but the last is a multiple of 1024; the last carries the
@@ -524,7 +524,7 @@ void test_command_upgrade_enforces_the_chunk_rules(void) {
     /* The remainder, 904 bytes, is the last chunk and is accepted. */
     TEST_ASSERT_EQUAL_INT(FW_OK, send_write(4096U, &s_image[4096], 904U));
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
-    TEST_ASSERT_EQUAL_UINT32(5000U, esp_fake_ota_written());
+    TEST_ASSERT_EQUAL_UINT32(5000U, ota_fake_written());
 }
 
 /* The whole flow, and the two things that must be true at the end of it: the
@@ -545,13 +545,13 @@ void test_command_upgrade_transfers_a_whole_image(void) {
     TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_UPG_END, NULL, 0U));
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
 
-    TEST_ASSERT_TRUE(esp_fake_ota_finalised());
-    TEST_ASSERT_EQUAL_HEX32(crc, esp_fake_ota_crc());
-    TEST_ASSERT_EQUAL_UINT32(0U, esp_fake_ota_open_sessions());
+    TEST_ASSERT_TRUE(ota_fake_finalised());
+    TEST_ASSERT_EQUAL_HEX32(crc, ota_fake_crc());
+    TEST_ASSERT_EQUAL_UINT32(0U, ota_fake_open_sessions());
 
     /* UPG_END finalises and arms NOTHING - the host follows with Set BOOT_SLOT
      * and RESTART_APP, which is what keeps a half-written slot unbootable. */
-    TEST_ASSERT_EQUAL_INT(0, (int)esp_fake_boot_slot_armed());
+    TEST_ASSERT_EQUAL_INT(-1, ota_fake_boot_slot_armed());
     TEST_ASSERT_EQUAL_UINT32(0U, esp_fake_restart_count());
 }
 
@@ -569,9 +569,9 @@ void test_command_upgrade_end_refuses_a_wrong_image_crc(void) {
     TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_UPG_END, NULL, 0U));
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_HW, reply_status());
 
-    TEST_ASSERT_FALSE(esp_fake_ota_finalised());
-    TEST_ASSERT_TRUE(esp_fake_ota_aborted());
-    TEST_ASSERT_EQUAL_UINT32(0U, esp_fake_ota_open_sessions());
+    TEST_ASSERT_FALSE(ota_fake_finalised());
+    TEST_ASSERT_TRUE(ota_fake_aborted());
+    TEST_ASSERT_EQUAL_UINT32(0U, ota_fake_open_sessions());
 
     /* And the session really is gone, so a stray UPG_END finds nothing. */
     TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_UPG_END, NULL, 0U));
@@ -592,14 +592,14 @@ void test_command_upgrade_end_refuses_an_incomplete_transfer(void) {
 
     TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_UPG_END, NULL, 0U));
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_STATE, reply_status());
-    TEST_ASSERT_FALSE(esp_fake_ota_finalised());
+    TEST_ASSERT_FALSE(ota_fake_finalised());
 
     /* Still open: finishing the transfer works without starting over. */
     TEST_ASSERT_EQUAL_INT(FW_OK, send_write(4096U, &s_image[4096], 4096U));
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
     TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_UPG_END, NULL, 0U));
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
-    TEST_ASSERT_TRUE(esp_fake_ota_finalised());
+    TEST_ASSERT_TRUE(ota_fake_finalised());
 }
 
 /* There is no abort opcode: a host that gave up half way just sends UPG_BEGIN
@@ -619,12 +619,12 @@ void test_command_upgrade_begin_again_frees_the_first_session(void) {
     TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_FIRMWARE, 8192U, 0U, 4096U));
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
 
-    TEST_ASSERT_EQUAL_UINT32(2U, esp_fake_ota_begin_count());
-    TEST_ASSERT_EQUAL_UINT32(1U, esp_fake_ota_open_sessions());
-    TEST_ASSERT_TRUE(esp_fake_ota_aborted());
+    TEST_ASSERT_EQUAL_UINT32(2U, ota_fake_begin_count());
+    TEST_ASSERT_EQUAL_UINT32(1U, ota_fake_open_sessions());
+    TEST_ASSERT_TRUE(ota_fake_aborted());
 
     /* The new session starts from zero, so offset 0 is what it expects. */
-    TEST_ASSERT_EQUAL_UINT32(0U, esp_fake_ota_written());
+    TEST_ASSERT_EQUAL_UINT32(0U, ota_fake_written());
     TEST_ASSERT_EQUAL_INT(FW_OK, send_write(0U, s_image, 4096U));
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
 }
@@ -638,7 +638,7 @@ void test_command_upgrade_refuses_while_the_update_cycle_is_writing(void) {
 
     TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_FIRMWARE, 4096U, 0U, 4096U));
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_STATE, reply_status());
-    TEST_ASSERT_EQUAL_UINT32(0U, esp_fake_ota_begin_count());
+    TEST_ASSERT_EQUAL_UINT32(0U, ota_fake_begin_count());
 
     s_busy = false;
     TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_FIRMWARE, 4096U, 0U, 4096U));
@@ -649,27 +649,27 @@ void test_command_upgrade_maps_a_flash_failure_to_hw(void) {
     setup();
     fill_image(4096U);
 
-    esp_fake_fail_ota_begin(ESP_FAIL);
+    ota_fake_fail_begin(OTA_ERR_IO);
     TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_FIRMWARE, 4096U, 0U, 4096U));
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_HW, reply_status());
 
-    esp_fake_fail_ota_begin(ESP_OK);
+    ota_fake_fail_begin(OTA_OK);
     TEST_ASSERT_EQUAL_INT(FW_OK, send_begin(PROTOCOL_SLOT_FIRMWARE, 4096U, 0U, 4096U));
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
 
-    esp_fake_fail_ota_write(ESP_FAIL);
+    ota_fake_fail_write(OTA_ERR_IO);
     TEST_ASSERT_EQUAL_INT(FW_OK, send_write(0U, s_image, 4096U));
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_HW, reply_status());
 
     /* A failed write advanced nothing, so the host may retry the same chunk. */
-    esp_fake_fail_ota_write(ESP_OK);
+    ota_fake_fail_write(OTA_OK);
     TEST_ASSERT_EQUAL_INT(FW_OK, send_write(0U, s_image, 4096U));
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
 
-    esp_fake_fail_ota_end(ESP_FAIL);
+    ota_fake_fail_end(OTA_ERR_IO);
     TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_UPG_END, NULL, 0U));
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_HW, reply_status());
-    TEST_ASSERT_FALSE(esp_fake_ota_finalised());
+    TEST_ASSERT_FALSE(ota_fake_finalised());
 }
 
 /* -------------------------- Private functions -------------------------- */
@@ -714,6 +714,7 @@ static void setup(void) {
     };
 
     esp_fake_reset();
+    ota_fake_reset();
     memset(&s_cmd, 0, sizeof(s_cmd));
     memset(s_reply, 0, sizeof(s_reply));
     memset(s_payload, 0, sizeof(s_payload));

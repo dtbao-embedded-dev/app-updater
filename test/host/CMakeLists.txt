@@ -1,8 +1,10 @@
 # Host test harness (R-TST-02: pure logic must run without a board).
 #
 # The tests themselves live next to their modules (R-TST-07); this directory
-# only holds what it takes to compile and run them on a PC: the Unity runner
-# and the fake for the one vendor header the logic includes.
+# only holds what it takes to compile and run them on a PC: the Unity runner,
+# `fake/` - host implementations of our own driver contracts, which is where a
+# test of middleware belongs - and `stub/`, the shrinking set of vendor headers
+# that middleware still reaches for directly.
 #
 #   cmake -S test/host -B build/host && cmake --build build/host && ctest --test-dir build/host
 #
@@ -70,11 +72,14 @@ add_executable(host_tests
     "${REPO_ROOT}/middleware/cfg/src/cfg.c"
     "${REPO_ROOT}/middleware/cfg/test/test_cfg.c"
     stub/esp_fake.c
+    fake/ota_fake.c
     "${REPO_ROOT}/application/updater/src/updater.c"
     "${REPO_ROOT}/application/updater/test/test_updater.c")
 
 target_include_directories(host_tests PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}/stub"
+    "${CMAKE_CURRENT_LIST_DIR}/fake"
+    "${REPO_ROOT}/driver/ota/include"
     "${REPO_ROOT}/middleware/fw/include"
     "${REPO_ROOT}/middleware/protocol/include"
     "${REPO_ROOT}/middleware/command/include"

@@ -11,10 +11,7 @@
 
 #include "command_priv.h"
 
-#include "esp_err.h"
 #include "esp_log.h"
-#include "esp_ota_ops.h"
-#include "esp_partition.h"
 #include "esp_rom_crc.h"
 
 #include <string.h>
@@ -36,7 +33,7 @@ static const char *TAG = "command";
 static uint32_t get_le32(const uint8_t *in);
 static void discard(command_t *cmd);
 static protocol_status_t check_begin_args(const command_t *cmd, uint8_t target, uint32_t img_size,
-                                          uint32_t chunk_max, const esp_partition_t **out_part);
+                                          uint32_t chunk_max);
 static protocol_status_t check_chunk_len(const command_upgrade_t *up, uint32_t chunk_len);
 
 /* -------------------------- Public functions --------------------------- */
@@ -50,8 +47,7 @@ protocol_status_t command_upgrade_begin(command_t *cmd, const protocol_req_t *re
     const uint32_t img_crc32 = get_le32(&req->data[BEGIN_IMG_CRC]);
     const uint32_t chunk_max = get_le32(&req->data[BEGIN_CHUNK_MAX]);
 
-    const esp_partition_t *part = NULL;
-    const protocol_status_t bad = check_begin_args(cmd, target, img_size, chunk_max, &part);
+    const protocol_status_t bad = check_begin_args(cmd, target, img_size, chunk_max);
     if (bad != PROTOCOL_OK) {
         /* Nothing has been touched: no erase, and any session already open is
          * still open. A rejected UPG_BEGIN costs the host nothing but a retry. */
@@ -59,26 +55,26 @@ protocol_status_t command_upgrade_begin(command_t *cmd, const protocol_req_t *re
     }
 
     /* The source spec is explicit that this is where a leak would live: a host
-     * retrying repeatedly would otherwise strand one OTA handle per attempt.
+     * retrying repeatedly would otherwise strand one session per attempt.
      * The old session goes before the new one is opened, never after. */
     discard(cmd);
 
-    esp_ota_handle_t handle = 0;
-    const esp_err_t err     = esp_ota_begin(part, (size_t)img_size, &handle);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "ota_begin slot=%u size=%lu failed: esp_err=0x%x", (unsigned)target,
-                 (unsigned long)img_size, (unsigned)err);
+    ota_session_t session = OTA_SESSION_NONE;
+    const ota_err_t err   = ota_session_begin(target, img_size, &session);
+    if (err != OTA_OK) {
+        ESP_LOGE(TAG, "ota begin slot=%u size=%lu: %s", (unsigned)target, (unsigned long)img_size,
+                 ota_err_str(err));
         return PROTOCOL_ERR_HW;
     }
 
-    cmd->upgrade.is_open    = true;
-    cmd->upgrade.target     = target;
-    cmd->upgrade.img_size   = img_size;
-    cmd->upgrade.img_crc32  = img_crc32;
-    cmd->upgrade.chunk_max  = chunk_max;
-    cmd->upgrade.written    = 0U;
-    cmd->upgrade.crc        = 0U;
-    cmd->upgrade.ota_handle = (uint32_t)handle;
+    cmd->upgrade.is_open   = true;
+    cmd->upgrade.target    = target;
+    cmd->upgrade.img_size  = img_size;
+    cmd->upgrade.img_crc32 = img_crc32;
+    cmd->upgrade.chunk_max = chunk_max;
+    cmd->upgrade.written   = 0U;
+    cmd->upgrade.crc       = 0U;
+    cmd->upgrade.session   = session;
 
     ESP_LOGI(TAG, "upgrade open: slot=%u size=%lu chunk=%lu", (unsigned)target,
              (unsigned long)img_size, (unsigned long)chunk_max);
@@ -111,11 +107,10 @@ protocol_status_t command_upgrade_write(command_t *cmd, const protocol_req_t *re
         return bad;
     }
 
-    const esp_err_t err = esp_ota_write((esp_ota_handle_t)cmd->upgrade.ota_handle,
-                                        &req->data[PROTOCOL_UPG_OFFSET_LEN], (size_t)chunk_len);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "ota_write at %lu failed: esp_err=0x%x", (unsigned long)offset,
-                 (unsigned)err);
+    const ota_err_t err =
+        ota_session_write(cmd->upgrade.session, &req->data[PROTOCOL_UPG_OFFSET_LEN], chunk_len);
+    if (err != OTA_OK) {
+        ESP_LOGE(TAG, "ota write at %lu: %s", (unsigned long)offset, ota_err_str(err));
         return PROTOCOL_ERR_HW;
     }
 
@@ -151,14 +146,14 @@ protocol_status_t command_upgrade_end(command_t *cmd) {
     }
 
     const uint8_t target = cmd->upgrade.target; /* read before the session goes */
-    const esp_err_t err  = esp_ota_end((esp_ota_handle_t)cmd->upgrade.ota_handle);
+    const ota_err_t err  = ota_session_end(cmd->upgrade.session);
 
-    /* esp_ota_end() frees the session whether it validated or not, so the
-     * handle is gone either way and must not be aborted a second time. */
+    /* The driver releases the session whether it validated or not, so it is
+     * gone either way and must not be aborted a second time. */
     memset(&cmd->upgrade, 0, sizeof(cmd->upgrade));
 
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "ota_end failed: esp_err=0x%x", (unsigned)err);
+    if (err != OTA_OK) {
+        ESP_LOGE(TAG, "ota end: %s", ota_err_str(err));
         return PROTOCOL_ERR_HW;
     }
 
@@ -180,26 +175,34 @@ static uint32_t get_le32(const uint8_t *in) {
  * is inert, because nothing but UPG_END makes a slot bootable. */
 static void discard(command_t *cmd) {
     if (cmd->upgrade.is_open) {
-        (void)esp_ota_abort((esp_ota_handle_t)cmd->upgrade.ota_handle);
+        (void)ota_session_abort(cmd->upgrade.session);
     }
     memset(&cmd->upgrade, 0, sizeof(cmd->upgrade));
 }
 
 /* Every UPG_BEGIN argument, checked before anything is erased. */
 static protocol_status_t check_begin_args(const command_t *cmd, uint8_t target, uint32_t img_size,
-                                          uint32_t chunk_max, const esp_partition_t **out_part) {
+                                          uint32_t chunk_max) {
     if ((target != PROTOCOL_SLOT_UPDATER) && (target != PROTOCOL_SLOT_FIRMWARE)) {
         return PROTOCOL_ERR_BAD_ARG;
     }
 
-    /* Overwriting the image underneath the running code is exactly what the
-     * two-slot layout exists to prevent. */
-    const esp_partition_t *running = esp_ota_get_running_partition();
-    const esp_partition_t *part    = command_slot_partition(target);
-    if (part == NULL) {
+    /* A slot this build does not have is a bad argument, not a fault. The size
+     * comes back in the same call, which is what the fit check below needs. */
+    uint32_t slot_size  = 0U;
+    const ota_err_t err = ota_slot_size_get(target, &slot_size);
+    if (err != OTA_OK) {
         return PROTOCOL_ERR_BAD_ARG;
     }
-    if ((running != NULL) && (running->subtype == part->subtype)) {
+
+    /* Overwriting the image underneath the running code is exactly what the
+     * two-slot layout exists to prevent. The wire's slot numbering and the
+     * driver's are the same numbering - one pair of slots, one encoding. */
+    uint8_t running = 0U;
+    if (ota_running_slot_get(&running) != OTA_OK) {
+        return PROTOCOL_ERR_HW;
+    }
+    if (running == target) {
         return PROTOCOL_ERR_STATE;
     }
 
@@ -212,7 +215,7 @@ static protocol_status_t check_begin_args(const command_t *cmd, uint8_t target, 
     /* An image that does not fit is refused here, minutes before the host
      * would otherwise find out. Zero is refused too: there is no such image,
      * and it would make the first chunk the last one. */
-    if ((img_size == 0U) || (img_size > part->size)) {
+    if ((img_size == 0U) || (img_size > slot_size)) {
         return PROTOCOL_ERR_BAD_ARG;
     }
 
@@ -226,7 +229,6 @@ static protocol_status_t check_begin_args(const command_t *cmd, uint8_t target, 
         return PROTOCOL_ERR_BAD_ARG;
     }
 
-    *out_part = part;
     return PROTOCOL_OK;
 }
 

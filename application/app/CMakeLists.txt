@@ -8,13 +8,12 @@ idf_component_register(SRCS "src/app.c"
                        PRIV_REQUIRES bsp
                                      cfg
                                      command
+                                     ota
                                      protocol
                                      storage
                                      updater
                                      usb_cdc
-                                     app_update
                                      esp_app_format
-                                     esp_partition
                                      esp_timer
                                      esp_hw_support
                                      freertos

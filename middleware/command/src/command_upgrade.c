@@ -12,7 +12,6 @@
 #include "command_priv.h"
 
 #include "esp_log.h"
-#include "esp_rom_crc.h"
 
 #include <string.h>
 
@@ -116,7 +115,7 @@ protocol_status_t command_upgrade_write(command_t *cmd, const protocol_req_t *re
 
     /* Folded as it goes, so UPG_END needs no second pass over 13 MB of flash. */
     cmd->upgrade.crc =
-        esp_rom_crc32_le(cmd->upgrade.crc, &req->data[PROTOCOL_UPG_OFFSET_LEN], chunk_len);
+        fw_crc32_le(cmd->upgrade.crc, &req->data[PROTOCOL_UPG_OFFSET_LEN], chunk_len);
     cmd->upgrade.written += chunk_len;
     return PROTOCOL_OK;
 }

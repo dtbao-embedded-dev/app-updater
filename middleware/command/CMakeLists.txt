@@ -4,7 +4,6 @@
 idf_component_register(SRCS "src/command.c"
                             "src/command_upgrade.c"
                        INCLUDE_DIRS "include"
-                       REQUIRES bsp fw ota protocol
-                       PRIV_REQUIRES esp_rom)
+                       REQUIRES bsp fw ota protocol)
 
 house_warnings(${COMPONENT_LIB})

@@ -16,6 +16,10 @@
 #include "esp_err.h"
 #include "esp_flash.h"
 #include "esp_log.h"
+#include "esp_mac.h"
+#include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include <string.h>
 
@@ -167,6 +171,41 @@ bsp_err_t bsp_led_status_set(bsp_t *dev, bool is_on) {
         return from_esp_err(err);
     }
     return BSP_OK;
+}
+
+/* The SDK's own enum, not a second table: every kind this driver names has to
+ * map onto one, and a switch is what makes a new kind a compile error here
+ * rather than a wrong MAC on the wire. */
+bsp_err_t bsp_mac_get(bsp_mac_kind_t kind, uint8_t *out) {
+    if (out == NULL) {
+        return BSP_ERR_PARAM;
+    }
+
+    esp_mac_type_t type;
+    switch (kind) {
+        case BSP_MAC_WIFI:
+            type = ESP_MAC_WIFI_STA;
+            break;
+        case BSP_MAC_BLE:
+            type = ESP_MAC_BT;
+            break;
+        default:
+            return BSP_ERR_PARAM;
+    }
+
+    const esp_err_t err = esp_read_mac(out, type);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "read mac kind=%d failed: esp_err=0x%x", (int)kind, (unsigned)err);
+        return from_esp_err(err);
+    }
+    return BSP_OK;
+}
+
+void bsp_restart(uint32_t grace_ms) {
+    if (grace_ms > 0U) {
+        vTaskDelay(pdMS_TO_TICKS(grace_ms));
+    }
+    esp_restart();
 }
 
 /* -------------------------- Private functions -------------------------- */

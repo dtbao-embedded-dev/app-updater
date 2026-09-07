@@ -14,6 +14,7 @@ endif()
 idf_component_register(SRCS "src/bsp.c" "${BSP_PORT_SRC}"
                        INCLUDE_DIRS "include"
                        PRIV_INCLUDE_DIRS "src"
-                       PRIV_REQUIRES esp_driver_gpio esp_hw_support spi_flash)
+                       PRIV_REQUIRES esp_driver_gpio esp_hw_support esp_system freertos
+                                     spi_flash)
 
 house_warnings(${COMPONENT_LIB})

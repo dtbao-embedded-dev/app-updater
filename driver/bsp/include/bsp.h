@@ -23,6 +23,9 @@ extern "C" {
 /** A pin field set to this means the board does not wire that function. */
 #define BSP_GPIO_NONE (-1)
 
+/** Bytes in a MAC address. */
+#define BSP_MAC_LEN 6U
+
 /* The USB and console pins are deliberately NOT here.
  *
  * They are fixed in silicon, not routed through the GPIO matrix, so no board
@@ -48,6 +51,18 @@ typedef enum {
     BSP_ERR_IO     = -7,  /**< The vendor SDK refused the operation.        */
     BSP_ERR_NO_PIN = -20, /**< The board does not wire that function.       */
 } bsp_err_t;
+
+/**
+ * @brief   Which of the chip's burned-in MAC addresses to read.
+ *
+ * The chip derives every interface address from one base value in eFuse, so
+ * these are answers the part already holds - not configuration, and not
+ * something a radio has to be brought up to obtain.
+ */
+typedef enum {
+    BSP_MAC_WIFI = 0, /**< Wi-Fi station address.                         */
+    BSP_MAC_BLE  = 1, /**< Bluetooth LE address.                          */
+} bsp_mac_kind_t;
 
 /**
  * @brief   Everything about this board that is not a register.
@@ -122,6 +137,36 @@ bsp_err_t bsp_board_get(const bsp_t *dev, const bsp_board_t **out_board);
  * @note    Any task. Not callable from an ISR.
  */
 bsp_err_t bsp_led_status_set(bsp_t *dev, bool is_on);
+
+/*
+ * The two calls below take no `bsp_t`, unlike everything above them. That is
+ * deliberate: neither reads board data nor touches a pin, so requiring an
+ * initialized instance would be inventing a dependency. It is also what lets
+ * the boot banner print the MAC before `bsp_init()` has run.
+ */
+
+/**
+ * @brief   Reads one of the chip's burned-in MAC addresses.
+ * @param   kind   which address to read
+ * @param   out    receives `BSP_MAC_LEN` bytes, most significant first
+ * @return  BSP_OK, BSP_ERR_PARAM on a NULL `out` or an unknown kind,
+ *          BSP_ERR_IO when the SDK could not read eFuse.
+ * @note    Reentrant, callable from any task and before `bsp_init()`. Needs no
+ *          radio: the value comes from eFuse, which is why this product can
+ *          answer for BLE with no BLE stack linked in.
+ */
+bsp_err_t bsp_mac_get(bsp_mac_kind_t kind, uint8_t *out);
+
+/**
+ * @brief   Resets the chip after a grace period.
+ * @param   grace_ms   how long to wait first; 0 resets immediately
+ * @return  Nothing - this call does not return on real hardware.
+ * @note    The grace period exists so that whatever was sent just before the
+ *          reset has time to leave: flushed to a FIFO is not the same as read
+ *          by the host at the other end. Blocks the calling task for
+ *          `grace_ms` and must not be called from an ISR.
+ */
+void bsp_restart(uint32_t grace_ms);
 
 #ifdef __cplusplus
 }

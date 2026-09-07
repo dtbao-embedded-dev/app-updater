@@ -20,13 +20,19 @@ the part nobody remembers.
     python docs/scripts/tool-esp.py test [--sanitize]
     python docs/scripts/tool-esp.py analyse
 
-CI and the release workflow call these same commands, so the workspace path,
+Every command that reaches the build needs the product workspace it acts on, a
+directory under workspace/, and never infers it - not even when the repo holds
+exactly one. `WORKSPACE=` in .env.esp says which, once per machine; `-w NAME`
+overrides that for a single run, which is how CI names the product it builds.
+
+CI and the release workflow call these same commands, so the workspace lookup,
 the fused `size size-components`, and the factory image name live in exactly
 one place. A second copy in a workflow is one that drifts while staying green.
 
-ESP-IDF is found through `.env.esp` at the repo root, which holds the path to
-the checkout that has export.bat / export.sh. The file is per-machine and
-gitignored; the first run writes a template and stops so it can be filled in.
+ESP-IDF and the workspace both come from `.env.esp` at the repo root, which
+holds the path to the checkout that has export.bat / export.sh and the product
+to build. The file is per-machine and gitignored; the first run writes a
+template and stops so it can be filled in.
 
 Python 3 so one set of commands runs on Windows and Linux without a shell port.
 """
@@ -40,12 +46,19 @@ import re
 import shutil
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-WORKSPACE = REPO / "workspace" / "0xF001"
+WORKSPACE_ROOT = REPO / "workspace"
 SOURCE_DIRS = ("application", "middleware", "driver")
 ENV_FILE = REPO / ".env.esp"
+
+# The product workspace this run acts on, resolved in main() and only for the
+# commands that reach the build. format/test/analyse have nothing to do with a
+# workspace, so on a repo with several of them they must not start by demanding
+# to be told which one.
+WORKSPACE: Path | None = None
 
 # Commands that talk to a board, so a port is meaningful. Everything else
 # rejects -p rather than accepting it and quietly doing nothing with it.
@@ -53,7 +66,7 @@ PORT_COMMANDS = ("flash", "monitor", "erase-flash")
 # fullclean, not just clean: `clean` keeps the CMake cache, so a new component,
 # a new managed dependency or an edited sdkconfig.defaults is silently ignored -
 # the build reuses the configuration it already has. Deleting the build tree is
-# what workspace/0xF001/CMakeLists.txt says to do, and this is that command.
+# what the workspace CMakeLists says to do, and this is that command.
 IDF_COMMANDS = ("build", "flash", "monitor", "size", "clean", "fullclean", "menuconfig",
                 "merge", "erase-flash")
 VERSION_FILE = REPO / "VERSION"
@@ -61,7 +74,28 @@ VERSION_FILE = REPO / "VERSION"
 # Flash erases a sector at a time; a partial erase has to line up with one.
 SECTOR_SIZE = 0x1000
 
-ENV_TEMPLATE = """# Where ESP-IDF lives on THIS machine.
+
+def workspace_refusal(names: list[str]) -> str:
+    """The nothing-chose-a-product refusal, listing the workspaces on disk.
+
+    Called twice: by resolve_workspace() for real, and once below with a
+    two-product example that ENV_TEMPLATE quotes. So the comment telling a
+    developer to fill WORKSPACE= in cannot end up quoting a sentence this script
+    no longer prints - rewording it here rewords both.
+
+    Says nothing about how many were found, so the one-workspace repo and the
+    six-workspace one get the same sentence.
+    """
+    listing = "\n".join(f"  {n}" for n in names)
+    return (f"Nothing says which product to build. Put one of these in "
+            f"{ENV_FILE.name}\nas WORKSPACE=, or pass -w NAME:\n{listing}")
+
+
+# Commented to the depth the template indents its shell transcript to.
+WORKSPACE_EXAMPLE = textwrap.indent(workspace_refusal(["0xF001", "0xF002"]),
+                                    "#   ")
+
+ENV_TEMPLATE = f"""# What THIS machine needs to build: where ESP-IDF lives, and which product.
 #
 # Per-machine, so this file is gitignored - committing it would point everyone
 # else at a path that does not exist for them.
@@ -72,31 +106,72 @@ ENV_TEMPLATE = """# Where ESP-IDF lives on THIS machine.
 #   Linux     IDF_PATH=/home/you/esp/v6.1/esp-idf
 #
 IDF_PATH=
+
+# Which product workspace commands act on: a directory name under workspace/.
+#
+# REQUIRED. Nothing is inferred, not even when the repo holds exactly one
+# workspace: a product nobody chose is a product nobody checked, and a build
+# that succeeded against the wrong one looks exactly like one that succeeded.
+#
+#   $ ls workspace/
+#   0xF001/   0xF002/
+#
+#   $ python docs/scripts/tool-esp.py build
+#
+{WORKSPACE_EXAMPLE}
+#
+# So fill the line in, once per machine:
+#
+#   WORKSPACE=0xF001
+#
+# `-w 0xF002` overrides it for a single run - the day you touch the other
+# product without wanting to edit this file. CI and the release workflow pass
+# -w on every build step, because a runner has no .env.esp to read.
+#
+WORKSPACE=
 """
 
 
-# ------------------------------------------------- finding ESP-IDF ---
+# --------------------------------------------------- .env.esp ---
 
-def read_env_file() -> str:
-    """The IDF_PATH line from .env.esp, or '' when it is not usable yet."""
+def env_value(key: str) -> str:
+    """One KEY= value from .env.esp, or '' when the file or the key is absent.
+
+    Deliberately not a dotenv parser: the file is a handful of KEY=VALUE lines a
+    developer edits by hand, and a dependency to read six of them is a
+    dependency to install before the first build.
+    """
     if not ENV_FILE.exists():
         return ""
     for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if line.startswith("#") or "=" not in line:
             continue
-        key, _, value = line.partition("=")
-        if key.strip() == "IDF_PATH":
+        name, _, value = line.partition("=")
+        if name.strip() == key:
             return value.strip().strip('"').strip("'")
     return ""
 
 
+# ------------------------------------------------- finding ESP-IDF ---
+
+def write_env_template() -> bool:
+    """Put the template on disk. True when it was this call that wrote it.
+
+    Both the missing-IDF_PATH and the which-product refusals send a developer to
+    a line in this file, so both have to be sure the file is there to open.
+    """
+    if ENV_FILE.exists():
+        return False
+    ENV_FILE.write_text(ENV_TEMPLATE, encoding="utf-8")
+    return True
+
+
 def idf_root() -> Path:
     """Locate ESP-IDF, writing the template and stopping on the first run."""
-    raw = read_env_file()
+    raw = env_value("IDF_PATH")
 
-    if not ENV_FILE.exists():
-        ENV_FILE.write_text(ENV_TEMPLATE, encoding="utf-8")
+    if write_env_template():
         sys.exit(
             f"\nCreated {ENV_FILE.name}. Open it, paste the path to your ESP-IDF\n"
             f"checkout after IDF_PATH=, then run this command again.\n\n"
@@ -213,6 +288,60 @@ def detect_port() -> str:
     return ports[0].device
 
 
+# ------------------------------------------- product workspace ---
+
+def workspaces() -> list[Path]:
+    """Every product workspace: a directory under workspace/ with a CMakeLists.
+
+    The directory listing is the list. A second copy in .env.esp would be a
+    second thing to edit when a product is added, and the one that goes stale.
+    """
+    if not WORKSPACE_ROOT.is_dir():
+        return []
+    return sorted(d for d in WORKSPACE_ROOT.iterdir()
+                  if (d / "CMakeLists.txt").is_file())
+
+
+def resolve_workspace(named: str | None) -> Path:
+    """Which product to act on: -w, else WORKSPACE in .env.esp. No default.
+
+    Nothing is inferred, not even when the repo holds exactly one workspace.
+    That inference was written first and was wrong: it made the answer optional
+    on the machine where a mistake is cheap and mandatory on the machine where
+    it is not, and a product nobody chose is a product nobody checked. The whole
+    cost of requiring it is one line per machine and an explicit -w in CI, both
+    of which then say out loud what they build.
+
+    The process environment is deliberately not a third source: Jenkins and
+    friends set WORKSPACE to the job directory, and inheriting that would pick a
+    product from a variable nobody wrote for us.
+    """
+    found = workspaces()
+    if not found:
+        sys.exit(f"\nNo product workspace under {WORKSPACE_ROOT}.\nOne is a "
+                 f"directory there holding a CMakeLists.txt.\n")
+
+    choice = named or env_value("WORKSPACE")
+    if not choice:
+        # The file has to exist before being told to edit a line in it. On a
+        # fresh clone this refusal is the first thing that runs, before anything
+        # has asked about ESP-IDF.
+        created = ("\nThat file did not exist; it has been created from the "
+                   "template, and the\nline to fill in is the last one.\n"
+                   if write_env_template() else "")
+        sys.exit(f"\n{workspace_refusal([d.name for d in found])}\n{created}")
+
+    # Membership in the listing rather than a bare existence probe: that is what
+    # stops a WORKSPACE=../../somewhere from pointing idf.py outside the repo.
+    picked = WORKSPACE_ROOT / choice
+    if picked not in found:
+        source = "-w" if named else f"WORKSPACE in {ENV_FILE.name}"
+        listing = "\n".join(f"  {d.name}" for d in found)
+        sys.exit(f"\n{source} names `{choice}`, which is not a product "
+                 f"workspace here. What is:\n{listing}\n")
+    return picked
+
+
 # ------------------------------------------------------ commands ---
 
 def configured_flash_bytes() -> int:
@@ -269,7 +398,7 @@ def esptool(args: list[str], port: str | None, detect: bool = False) -> int:
 
 
 def idf(args: list[str], port: str | None, detect: bool = False) -> int:
-    """Run idf.py against the 0xF001 workspace.
+    """Run idf.py against the workspace main() resolved.
 
     `detect` asks for the port to be found, but only after the environment is
     known good. Order matters: resolving the port first meant a machine with no
@@ -285,7 +414,9 @@ def idf(args: list[str], port: str | None, detect: bool = False) -> int:
     if port:
         cmd += ["-p", port]
     cmd += args
-    print("idf.py", " ".join(cmd[3:]), flush=True)
+    # From the -C, not past it: with the workspace no longer a constant in this
+    # file, which product just got flashed has to be readable in the log.
+    print("idf.py", " ".join(cmd[2:]), flush=True)
     return subprocess.call(cmd, env=env)
 
 
@@ -308,7 +439,7 @@ def host_env() -> dict[str, str]:
     """
     env = dict(os.environ)
     if not env.get("IDF_PATH"):
-        configured = read_env_file()
+        configured = env_value("IDF_PATH")
         if configured:
             env["IDF_PATH"] = configured
     return env
@@ -427,6 +558,11 @@ def main() -> int:
     parser.add_argument("-p", "--port",
                         help=f"serial port, e.g. COM7. Only for: "
                              f"{', '.join(PORT_COMMANDS)}, or no command")
+    parser.add_argument("-w", "--workspace", metavar="NAME",
+                        help="product workspace under workspace/, e.g. 0xF001. "
+                             "Defaults to WORKSPACE in .env.esp, or to the only "
+                             "workspace in the repo. Not for: format, test, "
+                             "analyse")
     parser.add_argument("--address",
                         help="erase-flash only: start of the region to erase, "
                              "e.g. 0x19000. Erases the whole chip when omitted")
@@ -446,11 +582,21 @@ def main() -> int:
     if args.port and args.command not in (None, *PORT_COMMANDS):
         parser.error(f"-p/--port means nothing for `{args.command}`; it applies "
                      f"to {', '.join(PORT_COMMANDS)} or to no command at all")
+    if args.workspace and args.command not in (None, *IDF_COMMANDS):
+        parser.error(f"-w/--workspace means nothing for `{args.command}`; it "
+                     f"formats, tests and analyses the whole repo, not one "
+                     f"product")
     if (args.address or args.size) and args.command != "erase-flash":
         parser.error("--address/--size apply to `erase-flash` only")
     if bool(args.address) != bool(args.size):
         parser.error("--address and --size go together; one without the other "
                      "would erase a length or a place nobody named")
+    # Before configured_flash_bytes(), which reads the resolved workspace's
+    # sdkconfig.defaults, and only for the commands that reach the build.
+    if args.command in (None, *IDF_COMMANDS):
+        global WORKSPACE
+        WORKSPACE = resolve_workspace(args.workspace)
+
     region = None
     if args.address:
         try:

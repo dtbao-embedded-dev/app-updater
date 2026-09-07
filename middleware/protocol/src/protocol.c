@@ -11,8 +11,6 @@
 
 #include "protocol.h"
 
-#include "esp_rom_crc.h"
-
 #include <string.h>
 
 /* --------------------------- Private macros ---------------------------- */
@@ -230,7 +228,7 @@ uint32_t protocol_rsp_build(uint8_t *out, uint32_t out_cap, uint32_t command,
     }
 
     put_le32(&out[PROTOCOL_PREFIX_LEN + padded],
-             esp_rom_crc32_le(0U, out, PROTOCOL_PREFIX_LEN + padded));
+             fw_crc32_le(0U, out, PROTOCOL_PREFIX_LEN + padded));
 
     return total;
 }
@@ -330,7 +328,7 @@ static bool take_frame(protocol_parser_t *parser, protocol_req_t *out_req) {
          * padding - so header corruption is caught too, and a pad byte cannot
          * be tampered with unnoticed. */
         const uint32_t covered = PROTOCOL_PREFIX_LEN + padded;
-        if (get_le32(&parser->buf[covered]) != esp_rom_crc32_le(0U, parser->buf, covered)) {
+        if (get_le32(&parser->buf[covered]) != fw_crc32_le(0U, parser->buf, covered)) {
             /* Dropped silently, with no response: the COMMAND cannot be
              * trusted enough to echo. */
             resync(parser, 1U);

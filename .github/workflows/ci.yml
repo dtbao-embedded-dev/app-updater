@@ -53,10 +53,21 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       # pip lives in the IDF virtualenv and is on PATH only after export.sh;
       # the default container shell is sh, which does not source it.
+      #
+      # cppcheck is the one analyser here NOT pinned to a version, and that is
+      # a known gap rather than an oversight: it publishes no wheel and no
+      # official Linux binary, and an apt version pin breaks the next time the
+      # container's base image moves. The consequence is real - a developer on
+      # a newer cppcheck can see findings this job does not, and the other way
+      # round. Two things keep that from being silent: the version is printed
+      # below, so a divergence is in the log; and the tree is kept clean under
+      # the newest cppcheck anyone here runs, which is a superset of this one's
+      # findings. If cppcheck ever ships a pinnable artifact, pin it.
       - name: Install the analysers
         shell: bash
         run: |
           apt-get update -qq && apt-get install -y -qq cppcheck
+          cppcheck --version
           . "$IDF_PATH/export.sh"
           python -m pip install --quiet "clang-tidy==${CLANG_TIDY_VERSION}"
       # clang-tidy needs the exact compile flags, and the only build here that

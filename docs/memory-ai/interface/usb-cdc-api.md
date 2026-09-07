@@ -98,11 +98,13 @@ Consequences, all of them deliberate:
 - `EFUSE_USB_PHY_SEL` must **never** be burned: it is one-way and would take
   USB-Serial-JTAG download away in the bootloader too.
 
-The pins are recorded as constants in `driver/bsp/include/bsp.h`
-(`BSP_USB_DP_GPIO` 20, `BSP_USB_DM_GPIO` 19, `BSP_CONSOLE_UART_TX_GPIO` 43,
-`BSP_CONSOLE_UART_RX_GPIO` 44), cited to `soc/usb_pins.h` and
-`soc/uart_pins.h`. They are constants and not board-table rows because no board
-revision can move them.
+The repo does not state those pin numbers anywhere. They arrive from the BSP's
+per-chip port: `driver/bsp/src/port/bsp_esp32s3.c` includes `soc/usb_pins.h` and
+`soc/uart_pins.h` and returns `USBPHY_DP_NUM` / `USBPHY_DM_NUM` /
+`U0TXD_GPIO_NUM` / `U0RXD_GPIO_NUM` straight from the SDK — 20/19 and 43/44 on
+this target. They are not board-table rows because no board revision can move
+them, and not constants of ours because ESP-IDF already publishes them per
+`IDF_TARGET` — see [bsp-api.md](bsp-api.md).
 
 ## See also
 

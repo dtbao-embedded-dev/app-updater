@@ -24,7 +24,7 @@ opens a header.
 flowchart TD
     APP["application/ - app, updater"]
     MW["middleware/ - fw, ota_http, storage, protocol, command"]
-    DRV["driver/ - bsp pins and clock, usb_cdc the USB stack"]
+    DRV["driver/ - bsp pins and clock (+ per-chip port), usb_cdc the USB stack"]
     SDK["ESP-IDF - nvs_flash, esp_http_client, app_update, esp_timer, esp_tinyusb"]
 
     APP --> MW --> DRV --> SDK
@@ -45,7 +45,7 @@ the module's own public header; `PRIV_REQUIRES` means only the `.c` uses it.
 | `protocol` | `fw` | — | `esp_rom` |
 | `storage` | `fw` | — | `nvs_flash`, `esp_rom` |
 | `fw` | — | — | — |
-| `bsp` | — | — | `esp_driver_gpio`, `esp_hw_support`, `spi_flash` |
+| `bsp` | — | — | `esp_driver_gpio`, `esp_hw_support`, `spi_flash`, `soc` (via the common requires, for the port's pin headers) |
 | `usb_cdc` | — | — | `esp_tinyusb`, `freertos` |
 
 `fw` is a leaf: it depends on nothing, which is what lets both layers above it

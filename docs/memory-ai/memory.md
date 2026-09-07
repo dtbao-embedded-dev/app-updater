@@ -348,7 +348,7 @@ before anyone opens a header.
 | `middleware/protocol/` | The USB wire format: frame codec, status codes, opcode map. |
 | `middleware/command/` | Dispatches a decoded USB frame to the handler that serves it. |
 | `middleware/storage/` | The persisted settings/boot record in NVS. |
-| `driver/bsp/` | Pin map, clock, flash geometry. The only place a pin number appears. |
+| `driver/bsp/` | Pin map, clock, flash geometry. The only place a pin number appears, and the only module with a per-chip port. |
 | `driver/usb_cdc/` | The CDC-ACM byte pipe on USB-OTG. Owns the TinyUSB stack. |
 | `workspace/0xF001/` | Build entry for product 0xF001: CMakeLists, sdkconfig.defaults, partitions.csv. |
 | `test/host/` | Unity runner, the host fakes for the SDK headers our logic includes, and the CMake that builds them. |
@@ -374,7 +374,8 @@ Every directory under the three layer directories has the same inside:
 |------|------|
 | `include/<mod>.h` | The single public header. The only file an outsider includes. |
 | `src/<mod>.c` | Implementation. |
-| `src/<mod>_priv.h` | Internal declarations. Present only where something is actually shared: `application/app/` and `middleware/command/`. |
+| `src/<mod>_priv.h` | Internal declarations. Present only where something is actually shared: `application/app/`, `middleware/command/` and `driver/bsp/`. |
+| `src/port/<mod>_<target>.c` | The per-chip half of a module, one file per MCU family, picked by `IDF_TARGET` (R-LIB-02). Present only in `driver/bsp/`. |
 | `test/test_<mod>.c` | Host tests, present for `fw`, `updater`, `protocol` and `command`. Each function must also be listed in `test/host/runner.c` or it never runs. |
 | `CMakeLists.txt` | ESP-IDF component registration. |
 
@@ -383,9 +384,18 @@ word, so one grep for the prefix finds the folder, the file and every symbol in
 it. Verified: each of `app`, `updater`, `fw`, `ota_http`, `protocol`, `command`,
 `storage`, `bsp`, `usb_cdc` is declared in exactly one module directory.
 
-`middleware/command/` is the one module with two sources - `command.c` for the
-dispatch and the stateless handlers, `command_upgrade.c` for the image transfer
-session - which is what `command_priv.h` exists to bridge.
+`middleware/command/` has two sources - `command.c` for the dispatch and the
+stateless handlers, `command_upgrade.c` for the image transfer session - which
+is what `command_priv.h` exists to bridge.
+
+`driver/bsp/` splits on a different axis: not by object but by **chip**.
+`src/bsp.c` holds the board logic and names no chip; `src/port/bsp_esp32s3.c`
+holds what only the S3 can answer, behind the one function in `src/bsp_priv.h`.
+The CMake picks the port by `IDF_TARGET` and stops with an instruction when
+there is no file for the target, so a retarget cannot silently compile against
+another chip's pinout. Adding a chip is adding one file under `src/port/`,
+never an `#ifdef` inside `bsp.c` - see
+[../interface/bsp-api.md](../interface/bsp-api.md).
 
 ## Dependencies & build
 
@@ -435,7 +445,7 @@ opens a header.
 flowchart TD
     APP["application/ - app, updater"]
     MW["middleware/ - fw, ota_http, storage, protocol, command"]
-    DRV["driver/ - bsp pins and clock, usb_cdc the USB stack"]
+    DRV["driver/ - bsp pins and clock (+ per-chip port), usb_cdc the USB stack"]
     SDK["ESP-IDF - nvs_flash, esp_http_client, app_update, esp_timer, esp_tinyusb"]
 
     APP --> MW --> DRV --> SDK
@@ -456,7 +466,7 @@ the module's own public header; `PRIV_REQUIRES` means only the `.c` uses it.
 | `protocol` | `fw` | — | `esp_rom` |
 | `storage` | `fw` | — | `nvs_flash`, `esp_rom` |
 | `fw` | — | — | — |
-| `bsp` | — | — | `esp_driver_gpio`, `esp_hw_support`, `spi_flash` |
+| `bsp` | — | — | `esp_driver_gpio`, `esp_hw_support`, `spi_flash`, `soc` (via the common requires, for the port's pin headers) |
 | `usb_cdc` | — | — | `esp_tinyusb`, `freertos` |
 
 `fw` is a leaf: it depends on nothing, which is what lets both layers above it
@@ -1177,7 +1187,7 @@ name. The unknown-value fallback lives **after** the switch, not inside it.
 - [../data/error-code-model.md](../data/error-code-model.md) — the values and their meanings
 
 ### [interface] BSP API
-*`interface/bsp-api.md` - The board contract - resolve the board description, claim its pins, drive the status LED. - status: active - source: driver/bsp/include/bsp.h, driver/bsp/src/bsp.c:51-153 - keywords: bsp.h, bsp_init, bsp_deinit, bsp_board_get, bsp_led_status_set, bsp_err_str, bsp_board_t, bsp_cfg_t, BSP_GPIO_NONE*
+*`interface/bsp-api.md` - The board contract - resolve the board description, claim its pins, drive the status LED. - status: active - source: driver/bsp/include/bsp.h, driver/bsp/src/bsp_priv.h, driver/bsp/src/bsp.c, driver/bsp/src/port/bsp_esp32s3.c, driver/bsp/CMakeLists.txt - keywords: bsp.h, bsp_init, bsp_deinit, bsp_board_get, bsp_led_status_set, bsp_err_str, bsp_board_t, bsp_cfg_t, BSP_GPIO_NONE, bsp_priv.h, bsp_port_pins_t, bsp_port_pins_get, bsp_esp32s3.c, USBPHY_DP_NUM, U0TXD_GPIO_NUM, soc/usb_pins.h, soc/uart_pins.h, IDF_TARGET, port layer*
 
 # BSP API
 
@@ -1237,6 +1247,51 @@ The board table holds only what the schematic decides — the LED pin and its
 polarity. Flash size is asked of the part at init, so it cannot drift from the
 density actually fitted, and a query failure fails `bsp_init()` rather than
 yielding a plausible wrong number.
+
+## The per-chip port
+
+The module splits **board** facts from **chip** facts and keeps them in
+different files. Nothing in the repo re-states a number the chip's own SDK
+already publishes:
+
+| Fact | Varies by | Where it comes from |
+|------|-----------|---------------------|
+| LED pin, LED polarity | board revision | `s_board_table[]` in `bsp.c`, indexed by `board_rev` |
+| Flash density | the part fitted | `esp_flash_get_size()` at init |
+| USB D+/D− pads, UART0 TX/RX | **chip** | `bsp_port_pins_get()` in `src/port/bsp_<IDF_TARGET>.c`, which reads `soc/usb_pins.h` and `soc/uart_pins.h` |
+| GPIO and flash register access | chip | `esp_driver_gpio` / `spi_flash`, already per-target |
+
+### The port contract
+
+`src/bsp_priv.h` (R-MOD-06) is the whole interface between the two halves — one
+type and one function:
+
+| Name | Signature (text) | Does |
+|------|------------------|------|
+| `bsp_port_pins_t` | struct of four `int32_t`: `usb_dp_gpio`, `usb_dm_gpio`, `console_tx_gpio`, `console_rx_gpio` | The pins the chip fixes in silicon; `BSP_GPIO_NONE` for one the chip lacks |
+| `bsp_port_pins_get` | `bsp_port_pins_t bsp_port_pins_get(void)` | Hands them back **by value** — every field is a compile-time constant, so there is no failure and no status to return |
+
+`src/bsp.c` names no chip: it calls the port for the four numbers and logs them.
+`src/port/bsp_esp32s3.c` holds the two `soc/` includes and the S3's
+single-shared-USB-PHY story, because that story is different on a part with two
+PHYs or none.
+
+### Adding a chip
+
+Write `src/port/bsp_<target>.c` implementing `bsp_priv.h`. Nothing else changes
+— `CMakeLists.txt` resolves `src/port/bsp_${IDF_TARGET}.c` itself, and
+`bsp.c` stays untouched (R-LIB-02: a port file, never an `#ifdef` in the logic).
+
+A target with no port file **stops the build at configure time** with the file
+to create — verified by moving `bsp_esp32s3.c` aside and reconfiguring:
+
+```
+driver/bsp has no port for IDF_TARGET 'esp32s3'.
+Add src/port/bsp_esp32s3.c implementing src/bsp_priv.h.
+```
+
+That refusal is the point. Without it a retarget compiles `bsp.c` against
+whatever `soc/` offers and logs pins the part may not have.
 
 🔴 **Unverified against hardware:** the two board table values (`GPIO2`,
 active-high) are placeholders carrying a TODO, never checked against a 0xF001
@@ -1915,11 +1970,13 @@ Consequences, all of them deliberate:
 - `EFUSE_USB_PHY_SEL` must **never** be burned: it is one-way and would take
   USB-Serial-JTAG download away in the bootloader too.
 
-The pins are recorded as constants in `driver/bsp/include/bsp.h`
-(`BSP_USB_DP_GPIO` 20, `BSP_USB_DM_GPIO` 19, `BSP_CONSOLE_UART_TX_GPIO` 43,
-`BSP_CONSOLE_UART_RX_GPIO` 44), cited to `soc/usb_pins.h` and
-`soc/uart_pins.h`. They are constants and not board-table rows because no board
-revision can move them.
+The repo does not state those pin numbers anywhere. They arrive from the BSP's
+per-chip port: `driver/bsp/src/port/bsp_esp32s3.c` includes `soc/usb_pins.h` and
+`soc/uart_pins.h` and returns `USBPHY_DP_NUM` / `USBPHY_DM_NUM` /
+`U0TXD_GPIO_NUM` / `U0RXD_GPIO_NUM` straight from the SDK — 20/19 and 43/44 on
+this target. They are not board-table rows because no board revision can move
+them, and not constants of ours because ESP-IDF already publishes them per
+`IDF_TARGET` — see [bsp-api.md](bsp-api.md).
 
 ## See also
 

@@ -34,7 +34,7 @@ before anyone opens a header.
 | `middleware/protocol/` | The USB wire format: frame codec, status codes, opcode map. |
 | `middleware/command/` | Dispatches a decoded USB frame to the handler that serves it. |
 | `middleware/storage/` | The persisted settings/boot record in NVS. |
-| `driver/bsp/` | Pin map, clock, flash geometry. The only place a pin number appears. |
+| `driver/bsp/` | Pin map, clock, flash geometry. The only place a pin number appears, and the only module with a per-chip port. |
 | `driver/usb_cdc/` | The CDC-ACM byte pipe on USB-OTG. Owns the TinyUSB stack. |
 | `workspace/0xF001/` | Build entry for product 0xF001: CMakeLists, sdkconfig.defaults, partitions.csv. |
 | `test/host/` | Unity runner, the host fakes for the SDK headers our logic includes, and the CMake that builds them. |
@@ -60,7 +60,8 @@ Every directory under the three layer directories has the same inside:
 |------|------|
 | `include/<mod>.h` | The single public header. The only file an outsider includes. |
 | `src/<mod>.c` | Implementation. |
-| `src/<mod>_priv.h` | Internal declarations. Present only where something is actually shared: `application/app/` and `middleware/command/`. |
+| `src/<mod>_priv.h` | Internal declarations. Present only where something is actually shared: `application/app/`, `middleware/command/` and `driver/bsp/`. |
+| `src/port/<mod>_<target>.c` | The per-chip half of a module, one file per MCU family, picked by `IDF_TARGET` (R-LIB-02). Present only in `driver/bsp/`. |
 | `test/test_<mod>.c` | Host tests, present for `fw`, `updater`, `protocol` and `command`. Each function must also be listed in `test/host/runner.c` or it never runs. |
 | `CMakeLists.txt` | ESP-IDF component registration. |
 
@@ -69,9 +70,18 @@ word, so one grep for the prefix finds the folder, the file and every symbol in
 it. Verified: each of `app`, `updater`, `fw`, `ota_http`, `protocol`, `command`,
 `storage`, `bsp`, `usb_cdc` is declared in exactly one module directory.
 
-`middleware/command/` is the one module with two sources - `command.c` for the
-dispatch and the stateless handlers, `command_upgrade.c` for the image transfer
-session - which is what `command_priv.h` exists to bridge.
+`middleware/command/` has two sources - `command.c` for the dispatch and the
+stateless handlers, `command_upgrade.c` for the image transfer session - which
+is what `command_priv.h` exists to bridge.
+
+`driver/bsp/` splits on a different axis: not by object but by **chip**.
+`src/bsp.c` holds the board logic and names no chip; `src/port/bsp_esp32s3.c`
+holds what only the S3 can answer, behind the one function in `src/bsp_priv.h`.
+The CMake picks the port by `IDF_TARGET` and stops with an instruction when
+there is no file for the target, so a retarget cannot silently compile against
+another chip's pinout. Adding a chip is adding one file under `src/port/`,
+never an `#ifdef` inside `bsp.c` - see
+[../interface/bsp-api.md](../interface/bsp-api.md).
 
 ## Dependencies & build
 

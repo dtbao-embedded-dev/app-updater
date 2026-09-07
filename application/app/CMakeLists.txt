@@ -6,6 +6,7 @@ idf_component_register(SRCS "src/app.c"
                        INCLUDE_DIRS "include"
                        REQUIRES fw
                        PRIV_REQUIRES bsp
+                                     cfg
                                      command
                                      protocol
                                      storage

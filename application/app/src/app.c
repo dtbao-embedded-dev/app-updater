@@ -12,6 +12,7 @@
 
 #include "app_priv.h"
 #include "bsp.h"
+#include "cfg.h"
 #include "command.h"
 #include "protocol.h"
 #include "storage.h"
@@ -67,7 +68,7 @@ typedef struct {
     bsp_t bsp;
     storage_t storage;
     updater_t updater;
-    storage_record_t record;
+    cfg_t cfg;
     usb_cdc_t usb;
     command_t command;
     protocol_parser_t parser;
@@ -90,6 +91,8 @@ static fw_err_t bring_up_storage(app_ctx_t *ctx);
 static fw_err_t bring_up_bsp(app_ctx_t *ctx);
 static fw_err_t bring_up_updater(app_ctx_t *ctx);
 static fw_err_t bring_up_usb(app_ctx_t *ctx);
+static fw_err_t cfg_store_load(void *ctx, void *out, size_t cap, size_t *out_len);
+static fw_err_t cfg_store_save(void *ctx, const void *data, size_t len);
 static void on_usb_rx(void *ctx, const uint8_t *data, size_t len);
 static fw_err_t on_usb_reply(void *ctx, const uint8_t *data, size_t len);
 static bool is_slot_write_busy(void *ctx);
@@ -213,20 +216,39 @@ static fw_err_t bring_up_storage(app_ctx_t *ctx) {
         return FW_ERR_IO;
     }
 
-    const storage_cfg_t cfg = storage_cfg_default();
-    const fw_err_t err      = storage_init(&ctx->storage, &cfg);
+    const storage_cfg_t st_cfg = storage_cfg_default();
+    const fw_err_t err         = storage_init(&ctx->storage, &st_cfg);
     if (err != FW_OK) {
         return err;
     }
 
-    /* A missing or damaged record is not a failure: the device boots on the
-     * compiled-in defaults and says so (R-CFG-02, R-CFG-03). */
-    const fw_err_t load_err = storage_record_load(&ctx->storage, &ctx->record);
-    if (load_err != FW_OK) {
-        ESP_LOGW(TAG, "record unusable (%s), using defaults", fw_err_str(load_err));
-        ctx->record = storage_record_default();
-    }
-    return FW_OK;
+    /* The settings themselves live in middleware/cfg; storage is only where
+     * their bytes go, and these two wrappers are the only place in the image
+     * that knows which of the two it is. A missing or damaged record is not a
+     * failure - cfg_init() logs it, takes the compiled-in defaults and still
+     * reports FW_OK (R-CFG-02, R-CFG-03) - so anything non-OK from here is a
+     * real bring-up failure. */
+    const cfg_store_t store = {
+        .load = cfg_store_load,
+        .save = cfg_store_save,
+        .ctx  = ctx,
+    };
+    return cfg_init(&ctx->cfg, &store);
+}
+
+/* What makes middleware/cfg's persistence concrete. Kept as two one-line
+ * wrappers rather than pointing cfg straight at storage_blob_*: their first
+ * parameter is the whole application context, which is what lets the settings
+ * be re-pointed at the reserved cfg_setting partition later without cfg or
+ * storage changing at all. */
+static fw_err_t cfg_store_load(void *ctx, void *out, size_t cap, size_t *out_len) {
+    app_ctx_t *app = (app_ctx_t *)ctx;
+    return storage_blob_load(&app->storage, out, cap, out_len);
+}
+
+static fw_err_t cfg_store_save(void *ctx, const void *data, size_t len) {
+    app_ctx_t *app = (app_ctx_t *)ctx;
+    return storage_blob_save(&app->storage, data, len);
 }
 
 static fw_err_t bring_up_bsp(app_ctx_t *ctx) {
@@ -242,12 +264,23 @@ static fw_err_t bring_up_bsp(app_ctx_t *ctx) {
 }
 
 static fw_err_t bring_up_updater(app_ctx_t *ctx) {
-    updater_cfg_t cfg     = updater_cfg_default();
-    cfg.check_interval_ms = ctx->record.check_interval_ms;
-    cfg.on_state          = on_updater_state;
-    cfg.on_state_ctx      = ctx;
+    uint32_t interval_ms = 0U;
+    fw_err_t err         = cfg_check_interval_ms_get(&ctx->cfg, &interval_ms);
+    if (err != FW_OK) {
+        return err;
+    }
 
-    const fw_err_t err = updater_init(&ctx->updater, &cfg);
+    /* updater_init() rejects an interval at or past its scheduling horizon,
+     * and cfg refuses to hold or load one - both the setter and the record
+     * validator check it. So this call can no longer fail on a stored value:
+     * before cfg existed, a CRC-valid record with a large interval failed
+     * bring-up here instead of falling back to the defaults. */
+    updater_cfg_t up_cfg     = updater_cfg_default();
+    up_cfg.check_interval_ms = interval_ms;
+    up_cfg.on_state          = on_updater_state;
+    up_cfg.on_state_ctx      = ctx;
+
+    err = updater_init(&ctx->updater, &up_cfg);
     if (err != FW_OK) {
         return err;
     }

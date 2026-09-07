@@ -12,6 +12,9 @@
 
 /* ------------------------------ Includes ------------------------------- */
 
+#include <stddef.h>
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -56,6 +59,25 @@ typedef enum {
  *          the caller logs the result).
  */
 const char *fw_err_str(fw_err_t err);
+
+/**
+ * @brief   Reflected CRC-32 over a buffer, chainable.
+ * @param   seed   0 to start, or a previous return value to continue over a
+ *                 second buffer
+ * @param   data   bytes to fold in; may be NULL only when `len` is 0
+ * @param   len    number of bytes
+ * @return  The CRC-32 of everything folded in so far.
+ * @note    Polynomial 0xEDB88320, init and xorout 0xFFFFFFFF - the zlib and
+ *          Ethernet CRC-32, and bit for bit what `esp_rom_crc32_le()` used to
+ *          compute for this firmware. Deliberately plain C and no vendor call:
+ *          it is checked against stored records and wire frames that outlive
+ *          any one chip, so it may not depend on one chip's ROM.
+ * @note    Chaining is exact - `f(f(0,a,n),b,m)` equals `f(0,ab,n+m)` - which
+ *          is what lets the upgrade session fold an image chunk by chunk
+ *          instead of re-reading the slot at the end.
+ * @note    Reentrant, callable from any task and from an ISR.
+ */
+uint32_t fw_crc32_le(uint32_t seed, const void *data, size_t len);
 
 #ifdef __cplusplus
 }

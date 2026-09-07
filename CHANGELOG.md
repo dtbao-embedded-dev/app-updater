@@ -11,6 +11,42 @@ below, and leaves a fresh empty `[Unreleased]` here.
 ## [Unreleased]
 
 ### Changed
+- **Middleware calls mapped drivers, not the vendor SDK.** The defect this
+  started from: `command_upgrade_begin()` called `esp_ota_begin()` directly, so
+  the USB upgrade path - this product's entire bench and production route - was
+  nailed to one vendor, and its 31 host tests could only run because
+  `test/host/stub/` shadowed vendor headers with fakes pretending to be
+  ESP-IDF. Fixed everywhere it occurred rather than only where it was reported:
+  `middleware/command` routes OTA through `driver/ota` and restart/MAC through
+  `driver/bsp`; `protocol`, `cfg` and `command` dropped `esp_rom` for
+  `fw_crc32_le()`; `middleware/storage` moved wholesale to `driver/storage`.
+  **The SDK column is now empty for every middleware component but
+  `ota_http`**, and `esp_log.h` is the only vendor header middleware still
+  includes - both exceptions recorded as deviations 10 and 11. Verified by the
+  two greps in the new rule doc, not by inspection.
+- **`middleware/storage` is now `driver/storage`.** It was never anything but a
+  wrapped NVS blob store, so it belongs under the portability line. It carries
+  its own `storage_err_t` instead of `fw_err_t` (R-LAY-01: a driver may not
+  include a middleware header) and **took over `nvs_flash_init()`** rather than
+  documenting that the caller must call it first - a caller that has to
+  remember will forget. `from_storage_err()` in `application/app/src/app.c` is
+  the one place that knows both code spaces, and it clamps anything outside the
+  shared `-1 .. -19` range to `FW_ERR_IO` rather than casting a value
+  `fw_err_str()` cannot name.
+- **The merged factory image is named `bl_<project>_<pid>_<MonDDYY>.bin`** -
+  today, `bl_app_updater_0xF001_Sep0726.bin`. Every field comes from the build:
+  the `project()` token in the workspace CMakeLists, the workspace directory
+  name, and the UTC date. The month comes from a fixed English table, not
+  `strftime("%b")`, which follows `LC_TIME` and would make the artifact name
+  depend on whose laptop built it. The version left the file name - it is in
+  the image header via `PROJECT_VER`, and `tool-usb.py version` reads it back
+  off a running unit, which a file name cannot be checked against.
+  `release.yml` copies the image by glob and fails when it does not find
+  exactly one. **Known ceiling:** the date has no time of day, so two builds on
+  the same day overwrite each other silently.
+- README rewritten into the R-RPO-08 section order, with `Test` and
+  `Contributing` below the fold where the rule puts them, `-w 0xF001` in the
+  build commands, and a Layout tree checked path by path against disk.
 - **`middleware/storage` no longer knows what it stores.** The record, its
   defaults, its version and its CRC moved to the new `middleware/cfg`;
   `storage_record_t`, `storage_record_default`, `storage_record_load` and
@@ -58,6 +94,19 @@ below, and leaves a fresh empty `[Unreleased]` here.
   it and needs network for that.
 
 ### Fixed
+- A `TODO` in `application/updater/src/updater.c` told whoever writes the
+  DOWNLOADING step to call `esp_ota_write()` and `esp_ota_set_boot_partition()`
+  directly - exactly what the new layer rule forbids. It now names
+  `ota_session_write()` and `ota_boot_slot_set()` and says why. Found by
+  running the rule doc's own grep, not by review.
+- `tool-esp.py --help` claimed `-w` "defaults to WORKSPACE in .env.esp, or to
+  the only workspace in the repo". The second half is the inference
+  `resolve_workspace()` deliberately dropped, so the help described behaviour
+  the code refuses.
+- `application/updater/CMakeLists.txt` no longer names the dead `storage`
+  dependency; `updater.c` includes no header of it. `ota_http`, `app_update`
+  and `esp_partition` stay and are equally unused today - the CHECKING and
+  DOWNLOADING steps are written against them.
 - The published release artifacts could not flash a blank board. `flash_args`
   named `ota_data_initial.bin`, which was never uploaded, and referred to the
   bootloader and partition table by the directories they sit in inside
@@ -66,6 +115,38 @@ below, and leaves a fresh empty `[Unreleased]` here.
   offsets from its release notes, or the factory image from the next tag.
 
 ### Added
+- **`driver/ota`, the mapped OTA driver.** `esp_ota_*` and `esp_partition_*`
+  now live in exactly one module. Eleven functions - `ota_session_begin` /
+  `_write` / `_end` / `_abort`, `ota_slot_size_get`, `ota_slot_version_get`,
+  `ota_running_slot_get`, `ota_running_version_get`, `ota_boot_slot_set`,
+  `ota_pending_verify_is`, `ota_mark_valid` - behind `ota_err_t` and an opaque
+  `ota_session_t`, so neither `esp_err_t` nor `esp_ota_handle_t` reaches a
+  header above the driver layer (R-LAY-03).
+- **`bsp_restart(grace_ms)` and `bsp_mac_get(kind)`** in `driver/bsp`. Both are
+  instance-free, unlike the rest of that module: neither reads board data nor
+  touches a pin, which is also what lets the boot banner print the MAC before
+  `bsp_init()` has run.
+- **`fw_crc32_le()`** in `middleware/fw`, a 16-entry nibble-table reflected
+  CRC-32: 64 bytes of table, 128 bytes of image in total. Bit for bit what
+  `esp_rom_crc32_le()` computed, chaining included, so every CRC already stored
+  in flash still checks out.
+- **`middleware/fw/include/fw_config.h`, compile-time feature switches.**
+  `FW_FEATURE_USB_COMMAND` and `FW_FEATURE_UPDATER`, both defaulting to 1 and
+  applied only at the wiring points in `application/app/src/app.c` - a module
+  never tests its own switch. Measured, not estimated: turning the USB channel
+  off frees **67 688 bytes of `.bss`** (20.66 % of DRAM down to 0.85 %) and
+  41.4 KB of flash; turning the updater off leaves `updater_step` with no
+  address at all in `app_updater.map`. `confirm_or_roll_back()` sits outside
+  both on purpose, because a unit that cannot fetch updates must still confirm
+  the image it was given.
+- **First host tests for the blob store**, eleven of them, including the
+  read-compare-write wear guard that had never been exercised: ten saves of
+  identical bytes must reach flash once. The suite went from 69 tests to **83,
+  all green**, and `test/host/fake/` now holds host implementations of our own
+  driver contracts - `ota_fake.c`, `bsp_fake.c`, `nvs_fake.c` - which is where
+  a test of middleware belongs.
+- `docs/memory-ai/rule/layer-boundaries.md`: the rule below, its two named
+  exceptions with the reason for each, and the two greps that check it.
 - **A settings library, `middleware/cfg`.** It owns the settings record -
   manifest URL, last-good firmware version, check interval, boot-fail count,
   behind a `version`/`length`/`crc32` envelope - its compiled-in defaults, and
@@ -99,9 +180,23 @@ below, and leaves a fresh empty `[Unreleased]` here.
 - `docs/scripts/tool-esp.py` gained `fullclean`, which is what makes a new
   component, a new managed dependency or an edited `sdkconfig.defaults` take
   effect - `clean` keeps the CMake cache and silently ignores all three.
-- Releases now carry a merged `app-updater-<tag>-factory.bin` that provisions a
-  blank board with one command at `0x0`, plus `ota_data_initial.bin` and the
-  `sdkconfig` that produced the image.
+- Releases now carry a merged factory image that provisions a blank board with
+  one command at `0x0`, plus `ota_data_initial.bin` and the `sdkconfig` that
+  produced it. (First shipped as `app-updater-<tag>-factory.bin`; renamed to
+  `bl_<project>_<pid>_<MonDDYY>.bin` later in this same unreleased block.)
+
+### Removed
+- Seven vendor header stubs from `test/host/stub/`: `esp_fake.c`/`.h`,
+  `esp_ota_ops.h`, `esp_partition.h`, `esp_app_desc.h`, `esp_mac.h`,
+  `esp_system.h` and both `freertos/` headers. Once middleware stopped calling
+  the SDK there was nothing left for them to stub. What remains is `esp_log.h`
+  and an independent CRC-32 kept **on purpose** as the second opinion
+  `fw_crc32_le()` is compared against - a single wrong nibble in the new table
+  reddens that comparison and every protocol frame test with it, which is how
+  the new CRC was proved rather than assumed.
+- `command_slot_partition()` from `middleware/command`, `copy_field()` from
+  `command.c`, and the `VERSION_FILE` constant from `tool-esp.py` - each made
+  unused by the changes above.
 
 ## Released
 

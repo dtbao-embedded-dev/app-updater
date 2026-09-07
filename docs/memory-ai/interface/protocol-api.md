@@ -84,8 +84,9 @@ the buffer surfaces one byte later at worst.
 
 ## CRC
 
-`esp_rom_crc32_le(0, buf, len)` on target — the same call
-`middleware/storage` uses. The host suite supplies a **deliberately independent**
+`fw_crc32_le(0, buf, len)` — the same call `middleware/cfg` uses for the
+record CRC, and no longer a vendor one. The host suite supplies a
+**deliberately independent**
 bitwise implementation in `test/host/stub/esp_rom_crc.h`, and a known-answer
 test pins both to `crc32("123456789") == 0xCBF43926`. Without that vector a
 wrong CRC would agree with itself and pass everything.

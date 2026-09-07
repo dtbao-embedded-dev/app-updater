@@ -5,7 +5,7 @@ order: 4
 purpose: How the settings record is validated on read, how a write avoids wearing the flash out, and which module does which half.
 status: active
 updated: 2026-09-07
-source: middleware/cfg/src/cfg.c:56-133, middleware/cfg/src/cfg.c:238-290, middleware/storage/src/storage.c:83-151, application/app/src/app.c
+source: middleware/cfg/src/cfg.c:56-133, middleware/cfg/src/cfg.c:238-290, driver/storage/src/storage.c, application/app/src/app.c
 confidence: confirmed
 keywords: cfg_init, cfg_save, cfg_defaults_set, record_validate, record_crc, cfg_store_load, cfg_store_save, storage_blob_load, storage_blob_save, read-compare-write, nvs_set_blob, nvs_commit, esp_rom_crc32_le
 ---
@@ -20,7 +20,7 @@ keywords: cfg_init, cfg_save, cfg_defaults_set, record_validate, record_crc, cfg
 flowchart LR
     APP["application/app<br/>cfg_store_load / cfg_store_save"]
     CFG["middleware/cfg<br/>shape, defaults, validation"]
-    ST["middleware/storage<br/>NVS blob, wear guard"]
+    ST["driver/storage<br/>NVS blob, wear guard"]
 
     CFG -- "load / save callback" --> APP
     APP -- "storage_blob_load / _save" --> ST

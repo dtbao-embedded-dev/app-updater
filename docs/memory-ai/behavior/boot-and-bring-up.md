@@ -4,7 +4,7 @@ category: behavior
 order: 1
 purpose: What runs from app_main to the main loop, in what order, and what happens when a step fails.
 status: active
-updated: 2026-09-06
+updated: 2026-09-07
 source: application/app/src/app.c:64-174, application/app/src/app.c:195-210
 confidence: confirmed
 keywords: app_main, app_run, print_banner, APP_GIT_COMMIT, bring_up_storage, bring_up_bsp, bring_up_updater, confirm_or_roll_back, on_updater_state, now_ms, APP_TICK_MS

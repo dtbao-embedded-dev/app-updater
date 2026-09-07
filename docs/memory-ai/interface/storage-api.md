@@ -5,9 +5,9 @@ order: 3
 purpose: The contract for putting one opaque blob in NVS and reading it back, with no opinion about what is in it.
 status: active
 updated: 2026-09-07
-source: middleware/storage/include/storage.h, middleware/storage/src/storage.c:40-151
+source: driver/storage/include/storage.h, driver/storage/src/storage.c:40-151
 confidence: confirmed
-keywords: storage.h, storage_init, storage_deinit, storage_blob_load, storage_blob_save, storage_cfg_default, storage_t, storage_cfg_t, STORAGE_BLOB_MAX, nvs_get_blob, nvs_set_blob
+keywords: storage.h, storage_err_t, storage_err_str, storage_init, storage_deinit, storage_blob_load, storage_blob_save, storage_cfg_default, storage_t, storage_cfg_t, STORAGE_BLOB_MAX, nvs_get_blob, nvs_set_blob, nvs_flash_init, driver layer, from_storage_err, wear guard
 ---
 
 # Storage API
@@ -89,7 +89,8 @@ call chain overflows one. The settings record needs 176 bytes today.
   The logic that used to be testable here — defaults, version, CRC, string
   termination — moved to `middleware/cfg`, which has 13 of them.
 - `PRIV_REQUIRES` no longer lists `esp_rom`: the only user of
-  `esp_rom_crc32_le()` was the record CRC, and that left with the record.
+  `esp_rom_crc32_le()` was the record CRC, and that left with the record - the
+  CRC itself is now `fw_crc32_le()` in `middleware/fw`, no vendor call at all.
 
 ## See also
 

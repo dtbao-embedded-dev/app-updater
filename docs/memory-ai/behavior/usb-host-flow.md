@@ -121,7 +121,7 @@ what makes the synchronous protocol comfortable on this product.
 | Item | Holds the channel for |
 |------|----------------------|
 | `0x0602` UPG_WRITE | one flash write, tens of milliseconds at 4–32 KB |
-| `0x0603` UPG_END | the image validation `esp_ota_end()` performs |
+| `0x0603` UPG_END | the image validation `ota_session_end()` performs |
 | `0x0601` UPG_BEGIN | the target slot erase |
 | `0x0001` RESTART_APP | 100 ms of grace, then the chip resets |
 | everything else | microseconds — an eFuse read, a table lookup, a `memcpy` |

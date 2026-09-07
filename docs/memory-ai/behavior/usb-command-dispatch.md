@@ -74,11 +74,11 @@ reaching it means a row was added without a case.
 | Opcode | What it does |
 |--------|--------------|
 | `0x0006` PING | Points the reply builder at the request's own bytes, so they are copied once, straight to the wire. Refuses a payload past `PROTOCOL_MAX_DATA - PROTOCOL_STATUS_LEN` with `-3` (see the gap below) |
-| `0x0001` RESTART_APP | Replies `PROTOCOL_OK` **first**, logs, waits `COMMAND_RESTART_GRACE_MS` (100 ms), then `esp_restart()`. Returns the never-transmitted `PROTOCOL_ERR_CRC` as an internal "already answered", so the caller does not send a second reply |
-| `0x0101` Set BOOT_SLOT | Rejects a slot that is neither 0 nor 1 with `-4`; otherwise `esp_ota_set_boot_partition()`. A failure is `-5`, not `-6`: a slot whose image does not validate is a state a host can fix by transferring one |
-| `0x0201` VERSION | `[0:16]` from `esp_app_get_description()`, `[16:32]` from `esp_ota_get_partition_description()` on the `app_firmware` slot. A slot with no image leaves **sixteen zero bytes and answers OK** — "unset" is an answer, not a failure, so no second command is needed to tell them apart |
+| `0x0001` RESTART_APP | Replies `PROTOCOL_OK` **first**, logs, then `bsp_restart(COMMAND_RESTART_GRACE_MS)`, which waits 100 ms and resets. Returns the never-transmitted `PROTOCOL_ERR_CRC` as an internal "already answered", so the caller does not send a second reply |
+| `0x0101` Set BOOT_SLOT | Rejects a slot that is neither 0 nor 1 with `-4`; otherwise `ota_boot_slot_set()`. A failure is `-5`, not `-6`: a slot whose image does not validate is a state a host can fix by transferring one |
+| `0x0201` VERSION | `[0:16]` from `ota_running_version_get()`, `[16:32]` from `ota_slot_version_get(PROTOCOL_SLOT_FIRMWARE, ...)`. Both write straight into the reply field, bounded by its width. A slot with no image leaves **sixteen zero bytes and answers OK** — "unset" is an answer, not a failure, so no second command is needed to tell them apart |
 | `0x0202` Get BOOT_SLOT | Maps the running partition's subtype to the wire encoding. Neither OTA slot is `-6`, which no `partitions.csv` in this repo can produce |
-| `0x0203`/`0x0204` | `esp_read_mac()` for `ESP_MAC_WIFI_STA` / `ESP_MAC_BT`; a failure is `-6` |
+| `0x0203`/`0x0204` | `bsp_mac_get()` for `BSP_MAC_WIFI` / `BSP_MAC_BLE`; a failure is `-6` |
 | `0x0601`/`0x0602`/`0x0603` | Routed to [usb-upgrade-session.md](usb-upgrade-session.md) |
 
 **Set and Get BOOT_SLOT are asymmetric on purpose.** Set writes `otadata` for
@@ -97,7 +97,7 @@ read, so the 100 ms covers the host still having to be scheduled; a 16-byte
 frame is gone in well under a millisecond, so the wait is generous by two orders
 of magnitude and costs nothing before a reboot.
 
-On target `esp_restart()` never returns, so the only place this can be checked
+On target `bsp_restart()` never returns, so the only place this can be checked
 is the host suite: the fake counts resets instead of performing one, and the test
 asserts the reply was captured while that count was still zero.
 

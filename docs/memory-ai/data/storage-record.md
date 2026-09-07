@@ -16,7 +16,7 @@ keywords: cfg_record_t, CFG_RECORD_VERSION, crc32, manifest_url, last_ok_fw_vers
 
 **The record is `cfg_record_t`, owned by `middleware/cfg`.** Where it is stored
 is a separate decision: the shipped adapter hands the bytes to
-`middleware/storage`, which writes them as one opaque NVS blob under a
+`driver/storage`, which writes them as one opaque NVS blob under a
 namespace + key chosen at init (defaults `updater` / `record`). Nothing in the
 layout below depends on that choice.
 

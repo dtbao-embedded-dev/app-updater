@@ -34,7 +34,7 @@ invocation, with the port detected.
 | *(none)* | `idf.py build flash monitor` with the detected port | The default: the whole loop, one command |
 | `format` | `clang-format -i` over our sources | With `--check`: `--dry-run --Werror` instead |
 | `test` | Configure + build `test/host`, then `ctest` | No board needed; see the note below |
-| `merge` | `idf.py merge-bin -o app-updater-v<VERSION>-factory.bin` | One image at `0x0`; the name comes from `VERSION` |
+| `merge` | `idf.py merge-bin -o bl_<project>_<pid>_<MonDDYY>.bin` | One image at `0x0`. Every field comes from the build: `factory_image_name()` takes the `project()` token read by `cmake_project_name()`, the resolved workspace name, and the UTC date from a fixed English month table - never `strftime("%b")`, which follows `LC_TIME`. The version is not in the name; it is in the image header. |
 | `analyse` | `cppcheck` over our `.c`, `clang-tidy` over the host compile database | Configures the database itself when absent |
 
 | Flag | Applies to | Meaning |

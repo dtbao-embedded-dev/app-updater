@@ -7,7 +7,7 @@ status: active
 updated: 2026-09-07
 source: driver/bsp/include/bsp.h, driver/bsp/src/bsp_priv.h, driver/bsp/src/bsp.c, driver/bsp/src/port/bsp_esp32s3.c, driver/bsp/CMakeLists.txt
 confidence: confirmed
-keywords: bsp.h, bsp_init, bsp_deinit, bsp_board_get, bsp_led_status_set, bsp_err_str, bsp_board_t, bsp_cfg_t, BSP_GPIO_NONE, bsp_priv.h, bsp_port_pins_t, bsp_port_pins_get, bsp_esp32s3.c, USBPHY_DP_NUM, U0TXD_GPIO_NUM, soc/usb_pins.h, soc/uart_pins.h, IDF_TARGET, port layer
+keywords: bsp.h, bsp_init, bsp_deinit, bsp_board_get, bsp_led_status_set, bsp_restart, bsp_mac_get, bsp_mac_kind_t, BSP_MAC_WIFI, BSP_MAC_BLE, BSP_MAC_LEN, bsp_err_str, bsp_board_t, bsp_cfg_t, BSP_GPIO_NONE, bsp_priv.h, bsp_port_pins_t, bsp_port_pins_get, bsp_esp32s3.c, USBPHY_DP_NUM, U0TXD_GPIO_NUM, soc/usb_pins.h, soc/uart_pins.h, IDF_TARGET, port layer
 ---
 
 # BSP API
@@ -117,6 +117,30 @@ whatever `soc/` offers and logs pins the part may not have.
 🔴 **Unverified against hardware:** the two board table values (`GPIO2`,
 active-high) are placeholders carrying a TODO, never checked against a 0xF001
 schematic. They are the single point to fix before any bring-up.
+
+## The instance-free half
+
+Two calls take no `bsp_t`, unlike everything above. That is deliberate: neither
+reads board data nor touches a pin, so requiring an initialized instance would
+be inventing a dependency - and it is what lets the boot banner print the MAC
+before `bsp_init()` has run.
+
+```c
+typedef enum { BSP_MAC_WIFI = 0, BSP_MAC_BLE = 1 } bsp_mac_kind_t;
+#define BSP_MAC_LEN 6U
+
+bsp_err_t bsp_mac_get(bsp_mac_kind_t kind, uint8_t *out);
+void      bsp_restart(uint32_t grace_ms);
+```
+
+| Call | Contract |
+|------|----------|
+| `bsp_mac_get` | Reads one of the chip's burned-in addresses into `BSP_MAC_LEN` bytes, most significant first. `BSP_ERR_PARAM` on a NULL `out` or an unknown kind, `BSP_ERR_IO` when the SDK could not read eFuse. Needs no radio, which is why this product can answer for BLE with no BLE stack linked in. The kind maps onto `esp_mac_type_t` inside a `switch`, so a new kind is a compile error here rather than a wrong MAC on the wire. |
+| `bsp_restart` | Waits `grace_ms` and resets; **does not return on real hardware**. The grace period exists so whatever was sent just before the reset has time to leave - flushed to a FIFO is not the same as read by the host. Blocks the calling task; not callable from an ISR. |
+
+Both exist because `middleware/command` used to call `esp_restart()`,
+`esp_read_mac()` and `vTaskDelay()` itself. See
+[../rule/layer-boundaries.md](../rule/layer-boundaries.md).
 
 ## See also
 

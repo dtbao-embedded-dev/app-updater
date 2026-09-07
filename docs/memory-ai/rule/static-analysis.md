@@ -98,7 +98,7 @@ logic. A check with no subject is a check that only produces false positives.
 
 | Trigger | What it would catch |
 |---------|---------------------|
-| The OTA download path starts writing flash with offset/length arithmetic (`drain_body` into `esp_ota_write`) | A write past the end of the slot, a length that underflows |
+| The OTA download path starts writing flash with offset/length arithmetic (`drain_body` into `ota_session_write`) | A write past the end of the slot, a length that underflows |
 | A manifest parser appears | Reading past a buffer on a malformed response |
 | Any module starts calling `malloc`/`calloc`/`free` | Leak, double-free, use-after-free |
 | Anything opens a file, socket or `esp_http_client` handle outside a single function | A handle leaked on the error path |

@@ -16,7 +16,7 @@ keywords: cfg.h, cfg_t, cfg_store_t, cfg_record_t, cfg_load_cb_t, cfg_save_cb_t,
 
 ## Responsibility
 
-Two jobs used to live in `middleware/storage`: defining the settings record and
+Two jobs used to live in what is now `driver/storage`: defining the settings record and
 putting it in NVS. This module took the first. It holds the record, the
 compiled-in defaults, and the validation that decides whether a value is
 acceptable at all. Persistence leaves through `cfg_store_t`, the same

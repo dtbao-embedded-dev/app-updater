@@ -34,7 +34,8 @@ before anyone opens a header.
 | `middleware/protocol/` | The USB wire format: frame codec, status codes, opcode map. |
 | `middleware/command/` | Dispatches a decoded USB frame to the handler that serves it. |
 | `middleware/cfg/` | The device's settings: the record, its defaults, and one validated get/set pair per setting. Persistence arrives as an adapter. |
-| `middleware/storage/` | One opaque blob in NVS. Knows nothing about what is in it. |
+| `driver/ota/` | The two app slots: sizes, versions, which one runs, which boots next, and the write session. The only module naming `esp_ota_*`. |
+| `driver/storage/` | One opaque blob in NVS, with a read-compare-write wear guard. Knows nothing about what is in it. |
 | `driver/bsp/` | Pin map, clock, flash geometry. The only place a pin number appears, and the only module with a per-chip port. |
 | `driver/usb_cdc/` | The CDC-ACM byte pipe on USB-OTG. Owns the TinyUSB stack. |
 | `workspace/0xF001/` | Build entry for product 0xF001: CMakeLists, sdkconfig.defaults, partitions.csv. |

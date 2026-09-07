@@ -7,7 +7,7 @@
 > architecture -> data -> interface -> behavior -> rule (then adr/).
 > Confidence per doc: 🟢 confirmed | 🟡 inferred (verify) | 🔴 gap (needs a human).
 
-_Generated 2026-09-07 - 34 durable doc(s)._
+_Generated 2026-09-07 - 36 durable doc(s)._
 
 ## State (transient)
 
@@ -82,12 +82,35 @@ _Generated 2026-09-07 - 34 durable doc(s)._
 - **v0.1.0 is released**, cut end to end by `tool-release.py`: seven phases, two
   merged pull requests, an annotated tag on `main`, and eight published
   artifacts. Both workflows green on the runs that produced it.
+- **Middleware calls mapped drivers, not the vendor SDK.** Verified by the two
+  greps in [rule/layer-boundaries.md](rule/layer-boundaries.md), not by
+  reading: no vendor include in any middleware source but `esp_log.h` and
+  `ota_http`'s HTTP client, and no `esp_ota_*` / `esp_partition_*` / `nvs_*` /
+  `esp_restart` / `esp_read_mac` / `esp_rom` anywhere in `middleware/` or
+  `application/` outside two lines of deliberate comment prose. `driver/` holds
+  four modules now: `bsp`, `ota`, `storage`, `usb_cdc`.
+- **83 host tests, green**, up from 69, built under the firmware's own
+  `-Werror` warning set. Eleven of the new ones are the blob store's first
+  tests ever. **Three assertions were proved to have teeth by mutation**, not
+  assumed: one wrong nibble in the CRC table reddens both the direct comparison
+  against an independent implementation and every protocol frame test; deleting
+  the read-compare-write guard reddens exactly the wear test at 11 writes
+  instead of 1; `bsp_restart(0U)` reddens exactly the RESTART_APP ordering test.
+- **A feature can be compiled out, measured rather than assumed.**
+  `FW_FEATURE_USB_COMMAND` at 0 builds clean and frees **67 688 bytes of
+  `.bss`** — 20.66 % of DRAM down to 0.85 % — plus 41.4 KB of flash;
+  `FW_FEATURE_UPDATER` at 0 builds clean and leaves `updater_step` with no
+  address at all in `app_updater.map`. Both restored to 1 and the baseline size
+  returns exactly.
+- **The factory image says what it is.**
+  `tool-esp.py merge` produces `bl_app_updater_0xF001_Sep0726.bin`, every field
+  read from the build; `release.yml` copies it by glob and fails unless exactly
+  one matches.
 - **A settings library with a persistence seam, `middleware/cfg`.** It owns the
   record, the defaults and one validated get/set pair per setting; where the
   bytes go arrives as a two-callback adapter, so `cfg` names no storage
-  technology and `middleware/storage` shrank to an opaque NVS blob store. The
-  host suite went from 56 tests to **69, all green**, and one of the new ones
-  was **proved to have teeth by mutation**: deleting the
+  technology and the blob store it forwards to is now `driver/storage`. One of
+  its tests was **proved to have teeth by mutation**: deleting the
   `CFG_CHECK_INTERVAL_MAX_MS` guard from the setter reddens exactly
   `test_cfg_check_interval_refuses_the_scheduling_horizon` and nothing else.
   Restoring it returns the suite to green.
@@ -107,16 +130,21 @@ _Generated 2026-09-07 - 34 durable doc(s)._
 2. **A self-test in `confirm_or_roll_back()`** — the highest-value hole. Until
    it exists, a broken image confirms itself and rollback never fires.
 3. `updater` `CHECKING` step: fetch the manifest, compare versions, decide.
-4. `updater` `DOWNLOADING` step: drive the fetch into the OTA write API, set the
-   boot partition. The USB path already does this work in
-   `middleware/command/src/command_upgrade.c`; the HTTP path should reuse the
-   same session rules rather than growing a second set.
+4. `updater` `DOWNLOADING` step: drive the fetch into `ota_session_write()`,
+   then `ota_boot_slot_set()`. The USB path already runs those session rules in
+   `middleware/command/src/command_upgrade.c`; the HTTP path should reuse them
+   rather than growing a second set. **Never `esp_ota_*` directly** — see
+   [rule/layer-boundaries.md](rule/layer-boundaries.md).
 5. Network bring-up (Wi-Fi or Ethernet) — not in this repo at all.
 6. **Flash and boot v0.1.0 on real hardware.** Nothing has ever executed on a
    board, so everything about the flash layout is still arithmetic.
 7. An **on-target** smoke test. The host suite runs; nothing exercises a board.
 8. Record migration in `middleware/cfg` (`record_validate()` carries the
    TODO), before any field release.
+8b. **Wire the two layer-boundary greps into CI.** Today the rule in
+   [rule/layer-boundaries.md](rule/layer-boundaries.md) is enforced at review,
+   which means it is enforced when someone remembers. It is the only new rule
+   in the repo with no automated gate.
 9. Enable `gcc -fanalyzer` — deferred on purpose, not forgotten. The trigger is
    the first code that does buffer arithmetic, parsing, or allocation; see
    [rule/static-analysis.md](rule/static-analysis.md) for the exact list and the
@@ -154,15 +182,24 @@ _Generated 2026-09-07 - 34 durable doc(s)._
   never by silencing the warning.
 
 - ⚠ **Nothing in the firmware calls `cfg_save()`.** Settings are read at boot
-  and never written — unchanged from before the refactor, when
-  `storage_record_save()` had no caller either — so the linker drops
-  `cfg_save` from the image. The API and its tests exist; the first writer will
-  be whatever records `last_ok_fw_version` or `boot_fail_count`. Until then a
-  setting changed at runtime is lost on reset.
-- ⚠ `application/updater/CMakeLists.txt` still declares `PRIV_REQUIRES ...
-  storage`, but `updater.c` includes no header of it. A dead dependency, found
-  while wiring `cfg` and deliberately left alone: removing it is not this
-  change's business.
+  and never written, so the linker drops `cfg_save` from the image. The API and
+  its tests exist; the first writer will be whatever records
+  `last_ok_fw_version` or `boot_fail_count`. Until then a setting changed at
+  runtime is lost on reset. `storage_blob_save()` now has host tests either
+  way, including the wear guard, so the persistence half is no longer unproven
+  — only uncalled.
+- ⚠ **The factory image name has no time of day.** Two builds on the same day
+  produce the same `bl_..._Sep0726.bin` and the second overwrites the first
+  without a word. Deliberate, marked with a `ponytail:` comment in
+  `tool-esp.py` naming `-%H%M` as the upgrade.
+- ⚠ **`driver/ota` is new code on the path that writes flash and has never run
+  on a board.** Its host fake proves the contract; only hardware proves the
+  implementation.
+- ⚠ `application/updater/CMakeLists.txt` still declares `PRIV_REQUIRES
+  ota_http app_update esp_partition`, none of which `updater.c` includes. The
+  dead `storage` entry went when that module moved to `driver/`; these three
+  stay because the CHECKING and DOWNLOADING steps are written against them.
+  They are a lie until those steps exist.
 
 ### active-context.md
 
@@ -172,38 +209,86 @@ _Generated 2026-09-07 - 34 durable doc(s)._
 
 ## Current focus
 
-The **settings now have a library of their own.** `middleware/cfg` owns the
-record, its defaults and one validated get/set pair per setting;
-`middleware/storage` was cut down to an opaque NVS blob store, and the two
-adapter wrappers in `application/app` are the only place left that knows the
-settings live in NVS. 69 host tests green, firmware builds, `cfg` verified
-present in `app_updater.map`.
+**Middleware no longer speaks to the vendor SDK.** The change started from one
+line — `command_upgrade_begin()` calling `esp_ota_begin()` — and every other
+place with the same shape was fixed with it, because the point was never that
+one call: it was that the USB upgrade path, this product's entire bench and
+production route, was nailed to one vendor, and its 31 host tests could only
+run by shadowing vendor headers with fakes that pretended to be ESP-IDF.
 
-**What that leaves open, deliberately:** nothing calls `cfg_save()` yet, so a
-setting changed at runtime is still lost on reset. That was equally true before
-— `storage_record_save()` had no caller either — but the API and its tests now
-exist, so the first writer is cheap to add.
+What the tree looks like now:
 
-The **USB command channel** is written and green: a clean firmware build and
-three mutation checks proving its tests bite. A PC can now read a unit and push
-an image into `app_firmware` without a network.
+- `driver/` holds **four** modules, not two: `bsp`, `ota` (new), `storage`
+  (moved down from `middleware/`), `usb_cdc`.
+- **The SDK column of the component table is empty for every middleware
+  component but `ota_http`**, and `esp_log.h` is the only vendor header
+  middleware still includes. Both are named exceptions with written reasons.
+- `test/host/stub/` went from nine vendor stubs to five, and only one of the
+  five is there for middleware — the log sink. The rest serve
+  `driver/storage`'s own tests, which have nothing below them to fake.
+- The host suite went from 69 tests to **83, all green**, including the first
+  eleven for the blob store.
+- The rule is written down, with the two greps that check it:
+  [rule/layer-boundaries.md](rule/layer-boundaries.md).
 
-**And it has still never run on hardware.** That is unchanged and now matters
-more, because the channel added two things a host test cannot reach: the USB
-descriptor a PC has to accept, and the PHY switch that takes USB-Serial-JTAG
-away. The next session is a bench session, in this order:
+**A feature can now be compiled out.** `middleware/fw/include/fw_config.h`
+holds `FW_FEATURE_USB_COMMAND` and `FW_FEATURE_UPDATER`. Both were flipped and
+rebuilt, not reasoned about: USB off frees **67 688 bytes of `.bss`** (20.66 %
+of DRAM down to 0.85 %) and 41.4 KB of flash; updater off leaves `updater_step`
+with no address in `app_updater.map` at all.
 
-1. Fill the BSP board table from the real 0xF001 schematic — still placeholders,
-   still able to drive a pin into something that does not like it.
+**And it has still never run on hardware.** Nothing in this change moves that,
+and the refactor makes it matter slightly more, not less: `driver/ota` is new
+code on the path that writes flash, and only a board can say whether it does.
+The next session is still a bench session, in this order:
+
+1. Fill the BSP board table from the real 0xF001 schematic — still
+   placeholders, still able to drive a pin into something that does not like
+   it.
 2. Flash over **UART0** (the console moved there; USB auto-download is gone).
-3. Cable in, and look for `USB\VID_A331&PID_F001`. If it does not appear, the
+3. Cable in, and look for `USB\\VID_A331&PID_F001`. If it does not appear, the
    descriptor or the PHY switch is where to look, not the protocol.
 4. `tool-usb.py ping`, then `version`, then a real `upgrade` of an
    `app_firmware` image, then `boot-slot 1` and `restart`, then `version` again
    to confirm the new image is what booted. That last step is the only one that
-   proves the upgrade worked.
+   proves the upgrade worked — and now it is also what proves `driver/ota`
+   works.
 
 ## Recent changes
+
+- 2026-09-07 — **The SDK left middleware, and a feature can be switched off.**
+  Nine tasks on `release/v0.1`, each gated on a command rather than a reading:
+
+  `driver/ota` took `esp_ota_*` and `esp_partition_*` out of
+  `middleware/command` and `application/app` — eleven functions behind
+  `ota_err_t` and an opaque `ota_session_t`. `bsp_restart()` and
+  `bsp_mac_get()` took `esp_restart`, `esp_read_mac` and `vTaskDelay`.
+  `fw_crc32_le()` in `middleware/fw` took `esp_rom_crc32_le` out of
+  `protocol`, `cfg` and `command` for 128 bytes of image.
+  `middleware/storage` moved to `driver/storage` with its own `storage_err_t`
+  and took over `nvs_flash_init()` from its caller. `fw_config.h` added the two
+  feature switches. The merged factory image became
+  `bl_<project>_<pid>_<MonDDYY>.bin`, built from the `project()` token, the
+  workspace name and the UTC date. The rule and both its exceptions went into
+  the bank, and the README into R-RPO-08 order.
+
+  **Three things were proved by mutation rather than assumed:** flipping one
+  nibble of the new CRC table reddens the direct comparison against the
+  independent implementation *and* every protocol frame test; deleting the
+  read-compare-write guard in `storage_blob_save()` reddens exactly the wear
+  test, at 11 writes instead of 1; `bsp_restart(0U)` reddens exactly the
+  RESTART_APP ordering test.
+
+  **Two things the run found that nobody asked about:** a `TODO` in
+  `updater.c` instructing whoever writes the DOWNLOADING step to call
+  `esp_ota_write()` directly — the exact thing the new rule forbids — and a
+  `tool-esp.py --help` string still advertising the infer-the-only-workspace
+  fallback that `resolve_workspace()` deliberately dropped. Both found by
+  running a check, not by reading.
+
+  **One deliberate ceiling:** the factory image name has a date but no time of
+  day, so two builds on the same day overwrite each other silently. Marked with
+  a `ponytail:` comment naming `-%H%M` as the upgrade.
 
 - 2026-09-07 — **A settings library, and `storage` reduced to a byte pusher.**
   `middleware/cfg` holds `cfg_record_t` (the four settings behind a
@@ -211,195 +296,122 @@ away. The next session is a bench session, in this order:
   `cfg_<field>_get`/`_set` per setting. Persistence is **not** its business: it
   arrives as a `cfg_store_t` of two callbacks, which is what makes re-pointing
   the settings at the reserved `cfg_setting` partition a new adapter instead of
-  an edit in `cfg`. `middleware/storage` lost the record entirely — no
-  `storage_record_t`, no CRC, no `esp_rom` — and gained
+  an edit in `cfg`. `storage` lost the record entirely and gained
   `storage_blob_load`/`storage_blob_save` with a `STORAGE_BLOB_MAX` ceiling,
   which exists so the read-compare-write wear guard keeps a fixed compare
-  buffer rather than a VLA on a task stack. `application/app` holds a `cfg_t`
-  and supplies the two wrappers. **A setter writes nothing**, by design: the
-  caller decides when a batch of changes is worth one flash write, and a
-  call-counting fake store asserts that negative. Three pieces of validation
-  are new: both stored strings must be terminated inside their own field (only
-  the URL was checked), a refused value leaves the old one in place, and
-  `check_interval_ms` is refused at or past the scheduling horizon — that last
-  one used to reach `updater_init()` unchecked and **fail bring-up** on a
-  CRC-valid record. No migration was written and none is needed: layout and NVS
-  key are unchanged.
+  buffer rather than a VLA on a task stack. **A setter writes nothing**, by
+  design: the caller decides when a batch of changes is worth one flash write.
+  Three pieces of validation are new, and the last of them —
+  `check_interval_ms` refused at or past the scheduling horizon — used to reach
+  `updater_init()` unchecked and **fail bring-up** on a CRC-valid record.
 
 - 2026-09-07 — **`driver/bsp` has a per-chip port.** `BSP_USB_DP_GPIO`,
   `BSP_USB_DM_GPIO` and the two console pins left `bsp.h`. They are fixed in
-  silicon, so this repo has no business restating them: `src/port/bsp_esp32s3.c`
-  reads `USBPHY_DP_NUM`, `USBPHY_DM_NUM`, `U0TXD_GPIO_NUM` and `U0RXD_GPIO_NUM`
-  from the chip's own `soc/` headers behind the new `bsp_priv.h` contract, and
-  `driver/bsp/CMakeLists.txt` picks `src/port/bsp_${IDF_TARGET}.c` — failing
-  with an instruction, not a missing-source error, when a target has no port.
-  A part with no internal USB PHY gets a port that reports `BSP_GPIO_NONE`,
-  not a `bsp.c` that fails to compile. `usb_pins.h` exists only for esp32s2 and
-  esp32s3, which is exactly why that include sits in the port.
+  silicon, so this repo has no business restating them:
+  `src/port/bsp_esp32s3.c` reads them from the chip's own `soc/` headers behind
+  the new `bsp_priv.h` contract, and `driver/bsp/CMakeLists.txt` picks
+  `src/port/bsp_${IDF_TARGET}.c` — failing with an instruction, not a missing
+  source error, when a target has no port.
 
 - 2026-09-07 — **`tool-esp.py` picks the product workspace instead of holding
-  it.** `WORKSPACE = REPO / "workspace" / "0xF001"` is gone; workspaces are the
-  directories under `workspace/` that have a `CMakeLists.txt`, the answer is
-  `WORKSPACE=` in `.env.esp`, and `-w NAME` overrides it per run. The listing on
-  disk is deliberately the only list — enumerating products in `.env.esp` too
-  would be the copy that goes stale. **Naming the product is required and there
-  is no default**: the first version inferred it when the repo held exactly one
+  it.** Workspaces are the directories under `workspace/` that have a
+  `CMakeLists.txt`, the answer is `WORKSPACE=` in `.env.esp`, and `-w NAME`
+  overrides it per run. **Naming the product is required and there is no
+  default**: the first version inferred it when the repo held exactly one
   workspace, which made the answer optional where a mistake is cheap and
-  mandatory where it is not. So `.env.esp` here now says `WORKSPACE=0xF001`, and
-  `ci.yml`/`release.yml` pass `-w 0xF001` on their five build steps — the only
-  place either workflow states which product it builds.
-  Resolution is lazy so `format`/`test`/`analyse`, which cover the whole repo,
-  never ask. The refusal sentence is one function, `workspace_refusal()`, that
-  the `.env.esp` template interpolates as a worked two-product example - so the
-  file a developer has to fill in cannot end up quoting a message the script no
-  longer prints, and that refusal creates the file when a fresh clone has none.
-  Still open: `.github/workflows/release.yml` hardcodes
-  `workspace/0xF001/build` in its artifact step, and `merge` names the image
-  `app-updater-v<VERSION>-factory.bin` with no product in it — neither matters
-  with one product, both need a decision with two.
+  mandatory where it is not.
 
 - 2026-09-07 — **The USB command channel.** CDC-ACM on USB-OTG at
   `0xA331:0xF001`, speaking the binary protocol from
-  `data-monitor/data-mirror-firmware/docs/spec/usb`. `middleware/protocol` holds
-  the frame codec and a 46-row opcode map; `middleware/command` dispatches to
-  ten served handlers and answers `-7` for the 36 aimed at hardware this board
-  does not have; `driver/usb_cdc` owns TinyUSB, the repo's first managed
-  dependency, since ESP-IDF v6.1 ships no USB device stack. The console moved to
-  UART0 because the S3 has one internal USB PHY and TinyUSB claims it. Also
-  `docs/scripts/tool-usb.py` and `fullclean` in `tool-esp.py`. Two findings
-  recorded as deviations: the spec's `PING` ceiling contradicts its own cap, and
-  the 36 unsupported opcodes are a deliberate `-7` rather than stubs.
+  `data-monitor/data-mirror-firmware/docs/spec/usb`. `middleware/protocol`
+  holds the frame codec and a 46-row opcode map; `middleware/command`
+  dispatches to ten served handlers and answers `-7` for the 36 aimed at
+  hardware this board does not have; `driver/usb_cdc` owns TinyUSB, the repo's
+  first managed dependency. The console moved to UART0 because the S3 has one
+  internal USB PHY and TinyUSB claims it.
 
-- 2026-09-06 — **Boot banner, and the BSP now asks the chip.** `app_run()`
-  opens with `print_banner()` — printf, not ESP_LOGI — carrying the git
-  commit — the full 40-character hash, a PRIVATE compile definition from
-  `application/app/CMakeLists.txt` —  chip model/revision/features, core count, clock and MAC. `bsp_init()` reads
-  `flash_size_bytes` from `esp_flash_get_size()` instead of a compiled-in
-  constant, so the board table holds only what the schematic decides. The
-  generated `sdkconfig` moved into `build/` (`SDKCONFIG` in the workspace
-  CMakeLists) so an edit to `sdkconfig.defaults` can no longer be silently
-  ignored. `@author` headers and the unused per-module `*_VERSION_MAJOR/
-  MINOR/PATCH` macros were removed. Verified by a clean rebuild: 1090
-  targets, no warnings under `-Werror`. CPU raised to 240 MHz
-  (`CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240`), verified in the regenerated
-  `build/sdkconfig`.
-
-- 2026-09-06 — **Flash is 16 MB, not 4 MB**, and the table was rebuilt on that.
-  Every partition now starts at `0xF000`, leaving `0x9000 .. 0xF000` (24 KB)
-  reserved and empty behind the table. `app_updater` is 2 MB, `app_firmware`
-  the 13.875 MB remainder — the two app slots are no longer the same size.
-  Two raw data partitions were added, `cfg_factory` (4 KB) and `cfg_setting`
-  (16 KB), both inside the old alignment padding at no cost to either slot.
-  `CONFIG_ESPTOOLPY_FLASHSIZE_16MB` and the BSP board table follow.
-  Verified with ESP-IDF v6.1's `gen_esp32part.py`, not on hardware. See
-  [data/flash-and-partitions.md](data/flash-and-partitions.md).
-
-- 2026-09-06 — **History rewritten once** to strip the
-  `Co-Authored-By: Claude ...` trailer from the 17 commits that carried it, on
-  `main`, `developing` and `release/v0.1`. `filter-branch --msg-filter` only;
-  trees verified identical, commit counts unchanged. Tag `v0.1.0` was recreated
-  and now sits on `38fb9507`. The rule is recorded in
-  [rule/commit-messages.md](rule/commit-messages.md): no AI attribution trailer
-  in a commit message here, ever again.
-
-- 2026-09-06 — Found by reading v0.1.0's own assets back: the published set
-  could not flash a blank board. `release.yml` now ships a merged factory
-  image, `ota_data_initial.bin` and `sdkconfig`, flattens the `flash_args`
-  paths, and fails if either half of the defect returns.
-
-- 2026-09-06 — **v0.1.0 released.** Cut with `docs/scripts/tool-release.py`:
-  seven phases, exit 0. `release.yml` ran for the first time and passed, both
-  gates holding. Tag `v0.1.0` is annotated, on `38fb9507`, an ancestor of
-  `main`; eight artifacts published. `main` was never pushed to directly.
-- 2026-09-06 — `tool-release.py` added: the release procedure as one command,
-  with a pre-flight that refuses before writing anything.
-
-- 2026-09-06 — First real CI run (34031391115): 4/6 green. Two genuine failures
-  found and fixed — `-Wundef` cannot coexist with ESP-IDF's log headers, and
-  `pip` is not on PATH in the IDF container until `export.sh` is sourced. Both
-  fixes reproduced and verified in the same image locally before re-pushing.
-- 2026-09-06 — Firmware built for the first time: 1090 targets,
-  `app_updater.bin` 198 KB, 90% of its slot free.
-
-- 2026-09-06 — CI grown to the six jobs R-SAN asks for: format, cppcheck +
-  clang-tidy, host tests, ASan/UBSan, firmware build, gitleaks. Tool versions
-  pinned. Baseline verified clean by running each locally.
-- 2026-09-06 — Host test harness added under `test/host/`; `tool-esp.py` gained
-  `test` and `analyse`. The wrap test was found to pass against a broken
-  implementation and was rewritten until a mutation made it fail.
-- 2026-09-06 — Partition labels renamed to `app_updater` / `app_firmware`: the
-  two app slots now hold two different programs, which costs the updater its own
-  rollback slot.
-- 2026-09-06 — README rewritten with badges in the R-RPO-08 section order.
-- 2026-09-06 — `docs/CHANGELOG/` removed again: nothing is released, so every
-  entry is back under `[Unreleased]`.
-
-- 2026-09-06 — Changelog split: the root `CHANGELOG.md` now holds only
-  `[Unreleased]` plus a released-version index; `docs/CHANGELOG/v0.1.0.md` holds
-  the first entry. Recorded as a deviation from R-VER-13.
-- 2026-09-06 — Branch protection enabled on GitHub: `main` requires a pull
-  request (0 approvals) and blocks force-push and deletion; `developing` blocks
-  force-push and deletion. No bypass actors, so the owner is bound too.
-  Default branch moved from `developing` to `main`.
-- 2026-09-06 — First 8 commits pushed; branches `main`, `developing` and
-  `release/v0.1` all published and tracking.
-- 2026-09-06 — Memory bank generated: 20 durable docs across the five
-  categories, from the source as written.
-- 2026-09-06 — `scripts/fw.py` moved to `docs/scripts/` and renamed
-  `tool-esp.py`; every reference updated.
-- 2026-09-06 — Repository scaffolded from scratch against the house embedded-C
-  standard: six modules, the 0xF001 build entry, format config, git hook,
-  README and changelog.
+- 2026-09-06 — Boot banner with the git commit, BSP asking the chip for its
+  flash size, generated `sdkconfig` moved into `build/`, CPU at 240 MHz.
+- 2026-09-06 — Flash is 16 MB, not 4 MB, and the partition table was rebuilt on
+  that: `app_updater` 2 MB, `app_firmware` the 13.875 MB remainder, plus
+  `cfg_factory` (4 KB) and `cfg_setting` (16 KB) inside the old alignment
+  padding.
+- 2026-09-06 — **v0.1.0 released**, cut end to end by `tool-release.py`. Its
+  published assets cannot flash a blank board; fixed for the next tag, and the
+  tag itself cannot be corrected.
+- 2026-09-06 — History rewritten once to strip the `Co-Authored-By: Claude`
+  trailer from 17 commits. The rule is in
+  [rule/commit-messages.md](rule/commit-messages.md).
+- 2026-09-06 — CI grown to six jobs, host harness added under `test/host/`,
+  static analysis at a clean baseline, branch protection on `main` and
+  `developing`, memory bank generated.
 
 ## Next steps
 
 1. Fill the BSP board table from the real 0xF001 schematic. Do this **before**
    flashing: the current GPIO is a placeholder and may be wired to something
    that does not like being driven.
-2. Flash and boot `v0.1.0`. That is the only thing that can confirm
+2. Flash and boot on hardware. That is the only thing that can confirm
    [data/flash-and-partitions.md](data/flash-and-partitions.md), which is still
-   arithmetic rather than observation.
-3. Run `spec-verify` and resolve or record what it finds.
-4. Then the self-test in `confirm_or_roll_back()`, the hole that matters most —
+   arithmetic rather than observation — and now also the only thing that can
+   confirm `driver/ota`.
+3. Wire the two layer-boundary greps from
+   [rule/layer-boundaries.md](rule/layer-boundaries.md) into CI. Today the rule
+   is enforced at review, which means it is enforced when someone remembers.
+4. Run `spec-verify` and resolve or record what it finds.
+5. Then the self-test in `confirm_or_roll_back()`, the hole that matters most —
    it shipped in v0.1.0 and is named in that release's notes.
 
 ## Active decisions
 
+- **Middleware calls mapped drivers, not the vendor SDK** — stricter than the
+  house standard's own table, which permits "HAL primitives". Two exceptions,
+  both with written reasons: `esp_log.h`, and `middleware/ota_http` keeping
+  `esp_http_client` because HTTP is a protocol stack rather than a device. See
+  [rule/layer-boundaries.md](rule/layer-boundaries.md) and deviations 10 and 11
+  in [rule/known-deviations.md](rule/known-deviations.md).
+- **The feature switches are a plain header, not Kconfig.** A `CONFIG_*` symbol
+  does not exist in the host test build, so `#if CONFIG_FEATURE_X` would read
+  one way on target and the other way under test. The cost accepted: no
+  `menuconfig` entry.
+- **`test/host/stub/esp_rom_crc.h` is kept although it stubs nothing.** It is
+  now the independent second opinion `fw_crc32_le()` is compared against; the
+  protocol tests build frames with one implementation and the parser checks
+  them with the other. Deleting it would collapse two opinions into one.
+- **`from_storage_err()` clamps rather than casts.** Only the shared
+  `-1 .. -19` range maps one for one; a code from the driver's own space
+  (`-20` and below) arrives as `FW_ERR_IO` rather than as a number
+  `fw_err_str()` cannot name.
+- **`ota`'s `from_esp_err()` is silent**, unlike the other drivers': every
+  caller inside the module already logs the raw vendor value with context the
+  mapper does not have — which slot, how many bytes.
 - **`CFG_CHECK_INTERVAL_MAX_MS` is a deliberate duplicate** of
-  `UPDATER_HORIZON_MS` in `application/updater/src/updater.c`. `middleware/` may
-  not include a header from `application/` (R-LAY-01), and validating the value
-  where it arrives beats failing bring-up minutes later — so the number is
+  `UPDATER_HORIZON_MS` in `application/updater/src/updater.c`. `middleware/`
+  may not include a header from `application/` (R-LAY-01), and validating the
+  value where it arrives beats failing bring-up minutes later — so the number is
   restated one layer down. Change one and you must change the other; nothing
   goes red to say so.
 - **`cfg` does not depend on `storage`.** It could have called it directly and
   saved two wrapper functions; the adapter exists so the `cfg_setting`
-  partition stays reachable without editing either module. That is the one place
-  in this change where a seam was chosen over the shorter diff, and the reason
-  is written down here rather than assumed obvious.
-
+  partition stays reachable without editing either module.
 - The USB dispatcher asks the application whether a slot write is in progress
   through a callback; it must not include `updater.h`, because `middleware/`
-  may not include from `application/`. The plan for this work originally had it
-  holding an `updater_t *`, which would have broken that.
-- `PROTOCOL_MAX_DATA` stays at the spec's 32772 so a host built against the spec
-  needs no change; the cost is two 32788-byte buffers, and the third the spec
-  budgets was removed by building a reply body straight into the reply frame.
-
+  may not include from `application/`.
+- `PROTOCOL_MAX_DATA` stays at the spec's 32772 so a host built against the
+  spec needs no change; the cost is two 32788-byte buffers, and
+  `FW_FEATURE_USB_COMMAND` is now how a product declines to pay it.
 - Commit messages carry no AI co-author or generation trailer. See
   [rule/commit-messages.md](rule/commit-messages.md).
 - The project-wide status type is `fw_err_t` in `middleware/fw/`, **not**
   `updater_err_t` — that name would collide with the `updater` module prefix.
 - Developer scripts live in `docs/scripts/`, a deliberate departure from the
-  house standard's repo-root `scripts/`. Recorded in
-  [rule/known-deviations.md](rule/known-deviations.md).
-- ESP-IDF has no `main` component here; `application/app/` provides `app_main()`
-  so that `workspace/` holds no source of ours.
+  house standard's repo-root `scripts/`.
+- ESP-IDF has no `main` component here; `application/app/` provides
+  `app_main()` so that `workspace/` holds no source of ours.
 - The changelog is split per version under `docs/CHANGELOG/`; the root file
   keeps `[Unreleased]` and the index only.
 - `main` is push-protected with no bypass actor. Every change into it goes
   through a pull request from `developing`, self-merged (0 approvals required).
-- New work goes on `developing`. `release/v0.1` did its job and is closed; the
-  next release cuts a fresh `release/*` branch.
 - The route to `main` is `release/*` → `developing` → `main`, merged and never
   squashed, because the tag has to land on a commit that survives on `main`.
 
@@ -433,7 +445,8 @@ before anyone opens a header.
 | `middleware/protocol/` | The USB wire format: frame codec, status codes, opcode map. |
 | `middleware/command/` | Dispatches a decoded USB frame to the handler that serves it. |
 | `middleware/cfg/` | The device's settings: the record, its defaults, and one validated get/set pair per setting. Persistence arrives as an adapter. |
-| `middleware/storage/` | One opaque blob in NVS. Knows nothing about what is in it. |
+| `driver/ota/` | The two app slots: sizes, versions, which one runs, which boots next, and the write session. The only module naming `esp_ota_*`. |
+| `driver/storage/` | One opaque blob in NVS, with a read-compare-write wear guard. Knows nothing about what is in it. |
 | `driver/bsp/` | Pin map, clock, flash geometry. The only place a pin number appears, and the only module with a per-chip port. |
 | `driver/usb_cdc/` | The CDC-ACM byte pipe on USB-OTG. Owns the TinyUSB stack. |
 | `workspace/0xF001/` | Build entry for product 0xF001: CMakeLists, sdkconfig.defaults, partitions.csv. |
@@ -515,7 +528,7 @@ Toolchain is ESP-IDF 6.x targeting ESP32-S3, C11. The build entry is
 - [../rule/coding-standard-source.md](../rule/coding-standard-source.md) — where the R-XXX-nn rules come from
 
 ### [architecture] Layering and Dependencies
-*`architecture/layering-and-dependencies.md` - The call direction between layers, the component dependency graph, and why there are two separate error code spaces. - status: active - source: application/app/CMakeLists.txt, application/updater/CMakeLists.txt, middleware/*/CMakeLists.txt, driver/bsp/CMakeLists.txt - keywords: REQUIRES, PRIV_REQUIRES, layering, dependency direction, callback, fw_err_t, bsp_err_t, usb_cdc_err_t, command_busy_cb_t, cfg_store_t, cfg_load_cb_t, cfg_save_cb_t*
+*`architecture/layering-and-dependencies.md` - The call direction between layers, the component dependency graph, and why there are two separate error code spaces. - status: active - source: application/app/CMakeLists.txt, application/updater/CMakeLists.txt, middleware/*/CMakeLists.txt, driver/*/CMakeLists.txt - keywords: REQUIRES, PRIV_REQUIRES, layering, dependency direction, callback, fw_err_t, bsp_err_t, usb_cdc_err_t, ota_err_t, storage_err_t, command_busy_cb_t, cfg_store_t, cfg_load_cb_t, cfg_save_cb_t, mapped driver, from_storage_err*
 
 # Layering and Dependencies
 
@@ -530,34 +543,52 @@ opens a header.
 ```mermaid
 flowchart TD
     APP["application/ - app, updater"]
-    MW["middleware/ - fw, ota_http, cfg, storage, protocol, command"]
-    DRV["driver/ - bsp pins and clock (+ per-chip port), usb_cdc the USB stack"]
-    SDK["ESP-IDF - nvs_flash, esp_http_client, app_update, esp_timer, esp_tinyusb"]
+    MW["middleware/ - fw, ota_http, cfg, protocol, command"]
+    DRV["driver/ - bsp, ota, storage, usb_cdc"]
+    SDK["ESP-IDF - app_update, esp_partition, nvs_flash, esp_tinyusb, gpio, esp_flash"]
 
     APP --> MW --> DRV --> SDK
     MW -. "event callback" .-> APP
 ```
+
+**Middleware reaches the SDK through a driver, not directly** - two named
+exceptions aside. That is a rule of this repo rather than of the house
+standard, whose own table is looser; it has its own doc, with the exceptions
+and the two greps that check it:
+[../rule/layer-boundaries.md](../rule/layer-boundaries.md).
 
 ## Component dependency graph
 
 Each module is one ESP-IDF component. `REQUIRES` means the dependency appears in
 the module's own public header; `PRIV_REQUIRES` means only the `.c` uses it.
 
-| Component | REQUIRES | PRIV_REQUIRES (ours) | PRIV_REQUIRES (SDK) |
-|-----------|----------|----------------------|---------------------|
-| `app` | `fw` | `bsp`, `cfg`, `command`, `protocol`, `storage`, `updater`, `usb_cdc` | `app_update`, `esp_app_format`, `esp_partition`, `esp_timer`, `freertos`, `nvs_flash` |
-| `updater` | `fw` | `ota_http`, `storage` | `app_update`, `esp_partition` |
-| `ota_http` | `fw` | — | `esp_http_client`, `esp-tls` |
-| `command` | `fw`, `protocol` | — | `app_update`, `esp_app_format`, `esp_partition`, `esp_hw_support`, `esp_system`, `esp_rom`, `freertos` |
-| `protocol` | `fw` | — | `esp_rom` |
-| `cfg` | `fw` | — | `esp_rom` |
-| `storage` | `fw` | — | `nvs_flash` |
-| `fw` | — | — | — |
-| `bsp` | — | — | `esp_driver_gpio`, `esp_hw_support`, `spi_flash`, `soc` (via the common requires, for the port's pin headers) |
-| `usb_cdc` | — | — | `esp_tinyusb`, `freertos` |
+| Component | Layer | REQUIRES | PRIV_REQUIRES (ours) | PRIV_REQUIRES (SDK) |
+|-----------|-------|----------|----------------------|---------------------|
+| `app` | application | `fw` | `bsp`, `cfg`, `command`, `ota`, `protocol`, `storage`, `updater`, `usb_cdc` | `esp_app_format`, `esp_timer`, `esp_hw_support`, `freertos` |
+| `updater` | application | `fw` | `ota_http` | `app_update`, `esp_partition` (both unused today - the CHECKING and DOWNLOADING steps are written against them) |
+| `ota_http` | middleware | `fw` | — | `esp_http_client`, `esp-tls` (exception 2) |
+| `command` | middleware | `bsp`, `fw`, `ota`, `protocol` | — | — |
+| `protocol` | middleware | `fw` | — | — |
+| `cfg` | middleware | `fw` | — | — |
+| `fw` | middleware | — | — | — |
+| `bsp` | driver | — | — | `esp_driver_gpio`, `esp_hw_support`, `esp_system`, `freertos`, `spi_flash`, `soc` (via the common requires, for the port's pin headers) |
+| `ota` | driver | — | — | `app_update`, `esp_app_format`, `esp_partition` |
+| `storage` | driver | — | — | `nvs_flash` |
+| `usb_cdc` | driver | — | — | `esp_tinyusb`, `freertos` |
+
+**The SDK column is empty for every middleware component but `ota_http`.** That
+is the rule in [../rule/layer-boundaries.md](../rule/layer-boundaries.md) made
+visible in the build files: a vendor dependency appearing in a middleware row
+is the violation, and it shows up here before anyone opens a source file.
+
+`command` names `bsp` and `ota` in REQUIRES rather than PRIV_REQUIRES because
+`command.h` holds an `ota_session_t` and its handler prototypes take a
+`bsp_mac_kind_t` - both driver headers are part of its own interface.
 
 `fw` is a leaf: it depends on nothing, which is what lets both layers above it
-include it.
+include it. It is also where a pure function the SDK happened to provide now
+lives - `fw_crc32_le()`, which is why `esp_rom` left `protocol`, `cfg` and
+`command` in one commit.
 
 ## Two error code spaces, and where they meet
 
@@ -566,25 +597,43 @@ include it.
 | Project-wide | `fw_err_t` | `application/`, `middleware/` | One code space means the application handles a timeout the same way whichever module produced it. |
 | Driver-local | `bsp_err_t` | `driver/bsp/` | The driver layer must not include a middleware header, so it cannot use `fw_err_t`. |
 | Driver-local | `usb_cdc_err_t` | `driver/usb_cdc/` | Same reason. Mapped in `bring_up_usb()`, the one place that knows both. |
+| Driver-local | `ota_err_t` | `driver/ota/` | Same reason. Mapped where it is read: to `protocol_status_t` in `middleware/command`, and logged by name in `confirm_or_roll_back()`. |
+| Driver-local | `storage_err_t` | `driver/storage/` | Same reason. Mapped in `from_storage_err()` in `application/app/src/app.c`, which clamps anything outside the shared -1..-19 range to `FW_ERR_IO` rather than casting a code `fw_err_str()` cannot name. |
 | Wire | `protocol_status_t` | the USB channel | Not an internal code at all: these are bytes a PC parses, so they may never be renumbered. `middleware/command` returns them; nothing converts them to `fw_err_t` because they mean different things. |
 
-Both share the same meanings for the generic range `-1 .. -19`, so the map
-between them is one-for-one. It is applied in exactly one place per driver, inside
-`bring_up_bsp()` and `bring_up_usb()` in `application/app/src/app.c`. If a
-driver ever grows a code the application must distinguish, those functions are
-the only edit.
+Every space shares the same meanings for the generic range `-1 .. -19`, so
+each map is one-for-one. There is exactly one map per driver, and each lives at
+the place that reads the code:
+
+| Driver space | Mapped in | To |
+|--------------|-----------|-----|
+| `bsp_err_t` | `bring_up_bsp()`, `application/app/src/app.c` | `fw_err_t` |
+| `usb_cdc_err_t` | `bring_up_usb()`, `application/app/src/app.c` | `fw_err_t` |
+| `storage_err_t` | `from_storage_err()`, `application/app/src/app.c` | `fw_err_t` |
+| `ota_err_t` | the handlers in `middleware/command/src/command*.c` | `protocol_status_t` |
+
+If a driver grows a code the layer above must distinguish, its row is the only
+edit. `ota_err_t` is the one that does not become an `fw_err_t` anywhere: its
+only readers answer a host on the wire, and `protocol_status_t` is not an
+internal code.
 
 Vendor status codes (`esp_err_t`) never escape the module that called the SDK:
-each of `bsp`, `storage` and `ota_http` has a private `from_esp_err()` helper
-that logs the vendor value and returns the module's own code. `cfg` needs none:
-it calls no SDK function that can fail.
+each of `bsp`, `ota`, `storage` and `ota_http` has a private `from_esp_err()`
+helper returning the module's own code. `cfg`, `protocol`, `command` and `fw`
+need none - they no longer call an SDK function at all.
+
+`ota`'s mapper is silent, unlike the others: every one of its callers already
+logs the raw vendor value with context the mapper does not have - which slot,
+how many bytes - so logging in both places would double every failure line.
 
 ## Reproduction notes
 
-- Verified: nothing under `driver/` includes `fw.h`, `cfg.h`, `storage.h`,
-  `ota_http.h`, `protocol.h`, `command.h`, `updater.h` or `app.h`; nothing under
-  `middleware/` includes `updater.h` or `app.h`. `cfg.h` and `storage.h` do not
-  include each other.
+- Verified by grep on 2026-09-07, both empty: nothing under `driver/` includes
+  `fw.h`, `fw_config.h`, `cfg.h`, `ota_http.h`, `protocol.h`, `command.h`,
+  `updater.h` or `app.h`; nothing under `middleware/` includes `updater.h`,
+  `app.h` or `app_priv.h`. Note `storage.h` is no longer on that list - it is a
+  driver header itself now, which is what let it stop returning `fw_err_t`.
+  `cfg.h` still includes no storage header of any kind.
 - `middleware/fw` is included sideways by its middleware siblings. That is a
   one-way include of a leaf, not a cycle.
 - **The USB channel is the sharpest case of "calls go down".** The dispatcher
@@ -615,10 +664,11 @@ it calls no SDK function that can fail.
 ## See also
 
 - [repo-layout.md](repo-layout.md) — the tree these layers occupy
+- [../rule/layer-boundaries.md](../rule/layer-boundaries.md) — the rule that keeps the SDK column empty
 - [../data/error-code-model.md](../data/error-code-model.md) — the two code spaces in detail
 
 ### [architecture] Build and Toolchain
-*`architecture/build-and-toolchain.md` - How the 0xF001 image is configured and compiled, including the main-less ESP-IDF build and the warning policy. - status: active - source: workspace/0xF001/CMakeLists.txt, workspace/0xF001/sdkconfig.defaults, VERSION, .clang-format - keywords: EXTRA_COMPONENT_DIRS, COMPONENTS, house_warnings, PROJECT_VER, sdkconfig.defaults, idf.py, Werror, esp32s3*
+*`architecture/build-and-toolchain.md` - How the 0xF001 image is configured and compiled, including the main-less ESP-IDF build and the warning policy. - status: active - source: workspace/0xF001/CMakeLists.txt, workspace/0xF001/sdkconfig.defaults, VERSION, .clang-format - keywords: EXTRA_COMPONENT_DIRS, COMPONENTS, house_warnings, PROJECT_VER, sdkconfig.defaults, idf.py, Werror, esp32s3, fw_config.h, FW_FEATURE_USB_COMMAND, FW_FEATURE_UPDATER, feature switch*
 
 # Build and Toolchain
 
@@ -752,6 +802,25 @@ the changelog headings. See
 - `house_warnings()` must be defined before the IDF include so it is in scope in
   every component subdirectory.
 
+## Feature switches, and why they are not Kconfig
+
+`middleware/fw/include/fw_config.h` holds `FW_FEATURE_USB_COMMAND` and
+`FW_FEATURE_UPDATER`, both `1` by default. Setting one to `0` removes the
+calls, so the linker drops the feature from the image; the components still
+compile, which keeps a disabled feature from rotting while it is off.
+
+ESP-IDF's own mechanism for this is Kconfig, and it was not used, for one
+reason: a `CONFIG_*` symbol does not exist in the host test build, where
+`sdkconfig.h` is never generated. `#if CONFIG_FEATURE_X` would then silently
+evaluate to 0 in every host test — a switch that reads one way on target and
+the other way under test is worse than no switch. A plain header reads
+identically in both builds and is greppable in one place.
+
+The cost accepted: no `menuconfig` entry, and a product-specific answer means a
+header under `workspace/<pid>/` with that directory ahead of
+`middleware/fw/include` on the include path. Worth revisiting only when a
+second product actually disagrees.
+
 ## See also
 
 - [ci-pipeline.md](ci-pipeline.md) — where this build runs unattended
@@ -846,7 +915,7 @@ toolchain and the plain runner has the `gh` CLI.
 
      | Group | Files | For |
      |-------|-------|-----|
-     | Provision a blank board | `app-updater-<tag>-factory.bin`, `bootloader.bin`, `partition-table.bin`, `ota_data_initial.bin`, `flash_args` | A bench. The factory image is one `esptool` write at `0x0`; the pieces are there for a partial reflash. |
+     | Provision a blank board | `bl_<project>_<pid>_<MonDDYY>.bin` (copied by glob, and the job fails unless exactly one matches), `bootloader.bin`, `partition-table.bin`, `ota_data_initial.bin`, `flash_args` | A bench. The factory image is one `esptool` write at `0x0`; the pieces are there for a partial reflash. |
      | Update a board | `app_updater.bin` | The OTA payload the updater downloads |
      | Diagnose one already in the field | `app_updater.elf`, `app_updater.map`, `sdkconfig`, `size-report.txt` | The `.elf` is the only thing that turns a panic backtrace into line numbers, and it must be the exact one that built the `.bin` |
 
@@ -881,7 +950,7 @@ toolchain and the plain runner has the `gh` CLI.
 - [../rule/versioning-and-release.md](../rule/versioning-and-release.md) — the procedure the tag gates enforce
 
 ### [data] Error Code Model
-*`data/error-code-model.md` - The two status enums the firmware uses, their numeric ranges, and where a vendor code is converted. - status: active - source: middleware/fw/include/fw.h, driver/bsp/include/bsp.h:33-49, middleware/storage/src/storage.c:209-227, middleware/ota_http/src/ota_http.c:189-205, driver/bsp/src/bsp.c:155-167 - keywords: fw_err_t, bsp_err_t, FW_OK, BSP_OK, FW_ERR_PARAM, FW_ERR_STATE, from_esp_err, esp_err_t*
+*`data/error-code-model.md` - The two status enums the firmware uses, their numeric ranges, and where a vendor code is converted. - status: active - source: middleware/fw/include/fw.h, driver/bsp/include/bsp.h, driver/ota/include/ota.h, driver/storage/include/storage.h, middleware/ota_http/src/ota_http.c:189-205, driver/bsp/src/bsp.c:155-167 - keywords: fw_err_t, bsp_err_t, FW_OK, BSP_OK, FW_ERR_PARAM, FW_ERR_STATE, from_esp_err, esp_err_t*
 
 # Error Code Model
 
@@ -965,7 +1034,7 @@ The `bsp_err_t` → `fw_err_t` map is applied in exactly one place, in
 
 **The record is `cfg_record_t`, owned by `middleware/cfg`.** Where it is stored
 is a separate decision: the shipped adapter hands the bytes to
-`middleware/storage`, which writes them as one opaque NVS blob under a
+`driver/storage`, which writes them as one opaque NVS blob under a
 namespace + key chosen at init (defaults `updater` / `record`). Nothing in the
 layout below depends on that choice.
 
@@ -1266,7 +1335,7 @@ move together or the band stops fitting a frame.
 - [../behavior/usb-host-flow.md](../behavior/usb-host-flow.md) — the host's sequence
 
 ### [interface] Project Status API (fw)
-*`interface/fw-status-api.md` - The contract of the project-wide status type and its name lookup. - status: active - source: middleware/fw/include/fw.h, middleware/fw/src/fw.c:25-56 - keywords: fw.h, fw_err_t, fw_err_str, FW_OK, FW_ERR_IO, fw_err_t codes*
+*`interface/fw-status-api.md` - The contract of the project-wide status type and its name lookup. - status: active - source: middleware/fw/include/fw.h, middleware/fw/src/fw.c:25-56 - keywords: fw.h, fw_config.h, fw_err_t, fw_err_str, fw_crc32_le, FW_OK, FW_ERR_IO, fw_err_t codes, FW_FEATURE_USB_COMMAND, FW_FEATURE_UPDATER, feature switch, crc32*
 
 # Project Status API (fw)
 
@@ -1299,12 +1368,57 @@ A rebuild must keep the switch in `fw_err_str()` free of a `default` label, so
 the compiler's `-Wswitch-enum` fails the build when a code is added without a
 name. The unknown-value fallback lives **after** the switch, not inside it.
 
+## `fw_crc32_le()` — the project's CRC-32
+
+```c
+uint32_t fw_crc32_le(uint32_t seed, const void *data, size_t len);
+```
+
+Reflected CRC-32, polynomial `0xEDB88320`, init and xorout `0xFFFFFFFF` — the
+zlib and Ethernet CRC, and bit for bit what `esp_rom_crc32_le()` computed for
+this firmware before it. `seed` is 0 to start or a previous return value to
+continue; `data` may be NULL only when `len` is 0.
+
+**Chaining is exact**: `f(f(0,a,n),b,m)` equals `f(0,ab,n+m)`. That is what
+lets the upgrade session fold a 13.875 MB image chunk by chunk instead of
+re-reading the slot at the end, and it is asserted directly by
+`test_fw_crc32_chains_across_two_buffers`.
+
+It lives here, in the dependency-free leaf, rather than behind a driver,
+because it is a pure function with no hardware under it — but it may not be a
+vendor call either: the values it produces are compared against records and
+frames that outlive any one chip. A 16-entry nibble table costs 64 bytes of
+flash and buys two lookups per byte instead of eight shifts, which matters
+because every byte of an incoming image passes through it.
+
+Three tests pin it: the known-answer vector `CRC32("123456789") == 0xCBF43926`,
+the chaining identity, and a direct comparison against the deliberately
+independent bitwise implementation in `test/host/stub/esp_rom_crc.h` over 256
+lengths. A single wrong table entry reddens the comparison and every protocol
+frame test with it — proved by mutation, not assumed.
+
+## `fw_config.h` — the compile-time feature switches
+
+Not a status contract, but it ships in the same module because every component
+already requires `fw`:
+
+| Macro | Default | Off means |
+|-------|---------|-----------|
+| `FW_FEATURE_USB_COMMAND` | `1` | No CDC-ACM channel, no frame codec, no dispatcher. Frees 67 688 bytes of `.bss` (20.66 % of DRAM to 0.85 %) and 41.4 KB of flash, measured. |
+| `FW_FEATURE_UPDATER` | `1` | No scheduled HTTP update cycle. `updater_step` ends up with no address in `app_updater.map` at all. |
+
+Every `#if` on these lives at the wiring points in
+`application/app/src/app.c` — a module never tests its own switch. A second
+product's answers belong in a header under `workspace/<pid>/`, not in an
+`#ifdef` on the product id here. See
+[../architecture/build-and-toolchain.md](../architecture/build-and-toolchain.md).
+
 ## See also
 
 - [../data/error-code-model.md](../data/error-code-model.md) — the values and their meanings
 
 ### [interface] BSP API
-*`interface/bsp-api.md` - The board contract - resolve the board description, claim its pins, drive the status LED. - status: active - source: driver/bsp/include/bsp.h, driver/bsp/src/bsp_priv.h, driver/bsp/src/bsp.c, driver/bsp/src/port/bsp_esp32s3.c, driver/bsp/CMakeLists.txt - keywords: bsp.h, bsp_init, bsp_deinit, bsp_board_get, bsp_led_status_set, bsp_err_str, bsp_board_t, bsp_cfg_t, BSP_GPIO_NONE, bsp_priv.h, bsp_port_pins_t, bsp_port_pins_get, bsp_esp32s3.c, USBPHY_DP_NUM, U0TXD_GPIO_NUM, soc/usb_pins.h, soc/uart_pins.h, IDF_TARGET, port layer*
+*`interface/bsp-api.md` - The board contract - resolve the board description, claim its pins, drive the status LED. - status: active - source: driver/bsp/include/bsp.h, driver/bsp/src/bsp_priv.h, driver/bsp/src/bsp.c, driver/bsp/src/port/bsp_esp32s3.c, driver/bsp/CMakeLists.txt - keywords: bsp.h, bsp_init, bsp_deinit, bsp_board_get, bsp_led_status_set, bsp_restart, bsp_mac_get, bsp_mac_kind_t, BSP_MAC_WIFI, BSP_MAC_BLE, BSP_MAC_LEN, bsp_err_str, bsp_board_t, bsp_cfg_t, BSP_GPIO_NONE, bsp_priv.h, bsp_port_pins_t, bsp_port_pins_get, bsp_esp32s3.c, USBPHY_DP_NUM, U0TXD_GPIO_NUM, soc/usb_pins.h, soc/uart_pins.h, IDF_TARGET, port layer*
 
 # BSP API
 
@@ -1414,12 +1528,36 @@ whatever `soc/` offers and logs pins the part may not have.
 active-high) are placeholders carrying a TODO, never checked against a 0xF001
 schematic. They are the single point to fix before any bring-up.
 
+## The instance-free half
+
+Two calls take no `bsp_t`, unlike everything above. That is deliberate: neither
+reads board data nor touches a pin, so requiring an initialized instance would
+be inventing a dependency - and it is what lets the boot banner print the MAC
+before `bsp_init()` has run.
+
+```c
+typedef enum { BSP_MAC_WIFI = 0, BSP_MAC_BLE = 1 } bsp_mac_kind_t;
+#define BSP_MAC_LEN 6U
+
+bsp_err_t bsp_mac_get(bsp_mac_kind_t kind, uint8_t *out);
+void      bsp_restart(uint32_t grace_ms);
+```
+
+| Call | Contract |
+|------|----------|
+| `bsp_mac_get` | Reads one of the chip's burned-in addresses into `BSP_MAC_LEN` bytes, most significant first. `BSP_ERR_PARAM` on a NULL `out` or an unknown kind, `BSP_ERR_IO` when the SDK could not read eFuse. Needs no radio, which is why this product can answer for BLE with no BLE stack linked in. The kind maps onto `esp_mac_type_t` inside a `switch`, so a new kind is a compile error here rather than a wrong MAC on the wire. |
+| `bsp_restart` | Waits `grace_ms` and resets; **does not return on real hardware**. The grace period exists so whatever was sent just before the reset has time to leave - flushed to a FIFO is not the same as read by the host. Blocks the calling task; not callable from an ISR. |
+
+Both exist because `middleware/command` used to call `esp_restart()`,
+`esp_read_mac()` and `vTaskDelay()` itself. See
+[../rule/layer-boundaries.md](../rule/layer-boundaries.md).
+
 ## See also
 
 - [../data/error-code-model.md](../data/error-code-model.md) — `bsp_err_t` and its map to `fw_err_t`
 
 ### [interface] Storage API
-*`interface/storage-api.md` - The contract for putting one opaque blob in NVS and reading it back, with no opinion about what is in it. - status: active - source: middleware/storage/include/storage.h, middleware/storage/src/storage.c:40-151 - keywords: storage.h, storage_init, storage_deinit, storage_blob_load, storage_blob_save, storage_cfg_default, storage_t, storage_cfg_t, STORAGE_BLOB_MAX, nvs_get_blob, nvs_set_blob*
+*`interface/storage-api.md` - The contract for putting one opaque blob in NVS and reading it back, with no opinion about what is in it. - status: active - source: driver/storage/include/storage.h, driver/storage/src/storage.c:40-151 - keywords: storage.h, storage_err_t, storage_err_str, storage_init, storage_deinit, storage_blob_load, storage_blob_save, storage_cfg_default, storage_t, storage_cfg_t, STORAGE_BLOB_MAX, nvs_get_blob, nvs_set_blob, nvs_flash_init, driver layer, from_storage_err, wear guard*
 
 # Storage API
 
@@ -1500,7 +1638,8 @@ call chain overflows one. The settings record needs 176 bytes today.
   The logic that used to be testable here — defaults, version, CRC, string
   termination — moved to `middleware/cfg`, which has 13 of them.
 - `PRIV_REQUIRES` no longer lists `esp_rom`: the only user of
-  `esp_rom_crc32_le()` was the record CRC, and that left with the record.
+  `esp_rom_crc32_le()` was the record CRC, and that left with the record - the
+  CRC itself is now `fw_crc32_le()` in `middleware/fw`, no vendor call at all.
 
 ## See also
 
@@ -1681,7 +1820,7 @@ invocation, with the port detected.
 | *(none)* | `idf.py build flash monitor` with the detected port | The default: the whole loop, one command |
 | `format` | `clang-format -i` over our sources | With `--check`: `--dry-run --Werror` instead |
 | `test` | Configure + build `test/host`, then `ctest` | No board needed; see the note below |
-| `merge` | `idf.py merge-bin -o app-updater-v<VERSION>-factory.bin` | One image at `0x0`; the name comes from `VERSION` |
+| `merge` | `idf.py merge-bin -o bl_<project>_<pid>_<MonDDYY>.bin` | One image at `0x0`. Every field comes from the build: `factory_image_name()` takes the `project()` token read by `cmake_project_name()`, the resolved workspace name, and the UTC date from a fixed English month table - never `strftime("%b")`, which follows `LC_TIME`. The version is not in the name; it is in the image header. |
 | `analyse` | `cppcheck` over our `.c`, `clang-tidy` over the host compile database | Configures the database itself when absent |
 
 | Flag | Applies to | Meaning |
@@ -2013,8 +2152,9 @@ the buffer surfaces one byte later at worst.
 
 ## CRC
 
-`esp_rom_crc32_le(0, buf, len)` on target — the same call
-`middleware/storage` uses. The host suite supplies a **deliberately independent**
+`fw_crc32_le(0, buf, len)` — the same call `middleware/cfg` uses for the
+record CRC, and no longer a vendor one. The host suite supplies a
+**deliberately independent**
 bitwise implementation in `test/host/stub/esp_rom_crc.h`, and a known-answer
 test pins both to `crc32("123456789") == 0xCBF43926`. Without that vector a
 wrong CRC would agree with itself and pass everything.
@@ -2296,7 +2436,7 @@ holds both implementations to one value rather than to each other.
 
 ## Responsibility
 
-Two jobs used to live in `middleware/storage`: defining the settings record and
+Two jobs used to live in what is now `driver/storage`: defining the settings record and
 putting it in NVS. This module took the first. It holds the record, the
 compiled-in defaults, and the validation that decides whether a value is
 acceptable at all. Persistence leaves through `cfg_store_t`, the same
@@ -2395,6 +2535,99 @@ from another task, with the usual caveat that the value may be stale on return.
 - [storage-api.md](storage-api.md) — the NVS blob store this module's shipped adapter calls
 - [../behavior/config-load-and-save.md](../behavior/config-load-and-save.md) — the load/save algorithm end to end
 - [updater-api.md](updater-api.md) — the consumer of `check_interval_ms`, and the owner of the horizon this module restates
+
+### [interface] OTA Slot API
+*`interface/ota-api.md` - The driver contract for the app slots - what each holds, which one runs, how an image is written into one, and how a fresh boot is confirmed. - status: active - source: driver/ota/include/ota.h, driver/ota/src/ota.c - keywords: ota.h, ota_err_t, ota_err_str, ota_session_t, OTA_SESSION_NONE, OTA_SLOT_COUNT, OTA_VERSION_MAX, ota_slot_size_get, ota_slot_version_get, ota_running_slot_get, ota_running_version_get, ota_boot_slot_set, ota_pending_verify_is, ota_mark_valid, ota_session_begin, ota_session_write, ota_session_end, ota_session_abort*
+
+# OTA Slot API
+
+> The only module in this repo that names `esp_ota_*` or `esp_partition_*`; everything above it addresses slots by index and holds sessions as an opaque word.
+
+## Responsibility
+
+Owns the two app slots: their sizes, the version in each one's image header,
+which one the running code booted from, which one boots next, and the write
+session that puts a new image into one. It knows nothing about *why* a slot is
+being written - that is the caller's business (R-LAY-06).
+
+## Constants
+
+| Name | Value | Meaning |
+|------|-------|---------|
+| `OTA_SLOT_COUNT` | `2U` | Slots this driver addresses, numbered from 0 in partition-table order. On this product slot 0 is `app_updater` and slot 1 is `app_firmware`, but the driver is told an index and knows nothing about what either is for. |
+| `OTA_VERSION_MAX` | `32U` | Capacity a version buffer needs, NUL included - the widest version field an image header carries, so a caller passing this much never sees a truncated answer. |
+| `OTA_SESSION_NONE` | `0U` | An `ota_session_t` naming no session. |
+
+The wire protocol numbers its slots the same way (`PROTOCOL_SLOT_UPDATER` = 0,
+`PROTOCOL_SLOT_FIRMWARE` = 1), so `middleware/command` hands the byte off the
+wire straight to this driver. Two encodings for one pair of slots is a bug
+waiting to happen; there is one.
+
+## Types
+
+| Type | Shape | Why |
+|------|-------|-----|
+| `ota_err_t` | `OTA_OK` 0, `OTA_ERR_PARAM` -1, `OTA_ERR_STATE` -2, `OTA_ERR_NO_SPACE` -4, `OTA_ERR_NOT_FOUND` -6, `OTA_ERR_IO` -7 | A driver may not include `fw.h` (R-LAY-01), so it carries its own space; the generic `-1 .. -19` values mean what they mean everywhere else (R-ERR-03). |
+| `ota_session_t` | `uint32_t` | A vendor handle behind a plain integer: `esp_ota_handle_t` may not appear above the driver layer (R-LAY-03), and a caller has nothing to do with the value but hand it back. |
+
+## Signatures
+
+```c
+const char *ota_err_str(ota_err_t err);
+
+ota_err_t ota_slot_size_get(uint8_t slot, uint32_t *out_size);
+ota_err_t ota_slot_version_get(uint8_t slot, char *out, size_t cap);
+ota_err_t ota_running_slot_get(uint8_t *out_slot);
+ota_err_t ota_running_version_get(char *out, size_t cap);
+ota_err_t ota_boot_slot_set(uint8_t slot);
+
+ota_err_t ota_pending_verify_is(bool *out_pending);
+ota_err_t ota_mark_valid(void);
+
+ota_err_t ota_session_begin(uint8_t slot, uint32_t img_size, ota_session_t *out);
+ota_err_t ota_session_write(ota_session_t session, const void *data, size_t len);
+ota_err_t ota_session_end(ota_session_t session);
+ota_err_t ota_session_abort(ota_session_t session);
+```
+
+There is no `ota_init()` / `ota_deinit()`: nothing here holds state between
+calls except the session, which the caller holds. A lifecycle pair for a
+stateless module would be two functions that do nothing.
+
+## Contracts worth knowing before calling
+
+| Call | The part a caller gets wrong |
+|------|------------------------------|
+| `ota_session_begin` | **It erases the slot.** Every argument a caller can check should be checked first. It refuses the running slot itself as well - the two-slot layout exists to prevent exactly that - but a caller must not rely on that being the only guard. |
+| `ota_session_write` | Sequential only, no seek: the session remembers where it is, which is why there is no offset parameter. |
+| `ota_session_end` | **Releases the session either way**, success or failure, so the caller must not abort it afterwards. Makes the slot bootable, not booted - arming is `ota_boot_slot_set()`. |
+| `ota_session_abort` | Leaves the slot unfinalised, which is inert: nothing but `ota_session_end()` makes a slot bootable, so a discarded transfer cannot be booted by accident. |
+| `ota_slot_version_get` | A slot never written answers `OTA_ERR_NOT_FOUND` and leaves `out` untouched, rather than returning an empty string. "Never written" and "written with an empty version" are different facts. |
+| `ota_mark_valid` | Call it only after something has actually checked the image. Calling it unconditionally at start-up turns the rollback into a formality (R-VER-08) - which is exactly the open hole recorded in [../rule/known-deviations.md](../rule/known-deviations.md). |
+
+## Where the vendor status stops
+
+`from_esp_err()` in `driver/ota/src/ota.c` is the last place an `esp_err_t`
+exists. It is **silent**, unlike the equivalent in `bsp`, `storage` and
+`ota_http`: every caller inside this module already logs the raw vendor value
+with context the mapper does not have - which slot, how many bytes - so logging
+in both places would double every failure line.
+
+## Host testing
+
+`test/host/fake/ota_fake.c` implements this contract in RAM, with a control
+surface (`ota_fake_reset`, `ota_fake_set_slot_size`, `ota_fake_fail_begin`,
+`ota_fake_open_sessions`, `ota_fake_crc`, ...) that lets a test of
+`middleware/command` drive the same API the target implementation satisfies.
+That is the point of the driver existing: before it, the same tests had to
+shadow `esp_ota_ops.h` and pretend to be ESP-IDF. See
+[../rule/testing.md](../rule/testing.md).
+
+## See also
+
+- [../rule/layer-boundaries.md](../rule/layer-boundaries.md) — the rule this driver exists to satisfy
+- [../behavior/usb-upgrade-session.md](../behavior/usb-upgrade-session.md) — the caller that drives a session end to end
+- [../data/flash-and-partitions.md](../data/flash-and-partitions.md) — what the two slots hold and how big they are
 
 ### [behavior] Boot and Bring-Up
 *`behavior/boot-and-bring-up.md` - What runs from app_main to the main loop, in what order, and what happens when a step fails. - status: active - source: application/app/src/app.c:64-174, application/app/src/app.c:195-210 - keywords: app_main, app_run, print_banner, APP_GIT_COMMIT, bring_up_storage, bring_up_bsp, bring_up_updater, confirm_or_roll_back, on_updater_state, now_ms, APP_TICK_MS*
@@ -2663,7 +2896,7 @@ decision, which is what keeps this module in the middleware layer.
 - [update-cycle-fsm.md](update-cycle-fsm.md) — the state that will drive this
 
 ### [behavior] Config Load and Save
-*`behavior/config-load-and-save.md` - How the settings record is validated on read, how a write avoids wearing the flash out, and which module does which half. - status: active - source: middleware/cfg/src/cfg.c:56-133, middleware/cfg/src/cfg.c:238-290, middleware/storage/src/storage.c:83-151, application/app/src/app.c - keywords: cfg_init, cfg_save, cfg_defaults_set, record_validate, record_crc, cfg_store_load, cfg_store_save, storage_blob_load, storage_blob_save, read-compare-write, nvs_set_blob, nvs_commit, esp_rom_crc32_le*
+*`behavior/config-load-and-save.md` - How the settings record is validated on read, how a write avoids wearing the flash out, and which module does which half. - status: active - source: middleware/cfg/src/cfg.c:56-133, middleware/cfg/src/cfg.c:238-290, driver/storage/src/storage.c, application/app/src/app.c - keywords: cfg_init, cfg_save, cfg_defaults_set, record_validate, record_crc, cfg_store_load, cfg_store_save, storage_blob_load, storage_blob_save, read-compare-write, nvs_set_blob, nvs_commit, esp_rom_crc32_le*
 
 # Config Load and Save
 
@@ -2675,7 +2908,7 @@ decision, which is what keeps this module in the middleware layer.
 flowchart LR
     APP["application/app<br/>cfg_store_load / cfg_store_save"]
     CFG["middleware/cfg<br/>shape, defaults, validation"]
-    ST["middleware/storage<br/>NVS blob, wear guard"]
+    ST["driver/storage<br/>NVS blob, wear guard"]
 
     CFG -- "load / save callback" --> APP
     APP -- "storage_blob_load / _save" --> ST
@@ -2892,7 +3125,7 @@ what makes the synchronous protocol comfortable on this product.
 | Item | Holds the channel for |
 |------|----------------------|
 | `0x0602` UPG_WRITE | one flash write, tens of milliseconds at 4–32 KB |
-| `0x0603` UPG_END | the image validation `esp_ota_end()` performs |
+| `0x0603` UPG_END | the image validation `ota_session_end()` performs |
 | `0x0601` UPG_BEGIN | the target slot erase |
 | `0x0001` RESTART_APP | 100 ms of grace, then the chip resets |
 | everything else | microseconds — an eFuse read, a table lookup, a `memcpy` |
@@ -2991,11 +3224,11 @@ reaching it means a row was added without a case.
 | Opcode | What it does |
 |--------|--------------|
 | `0x0006` PING | Points the reply builder at the request's own bytes, so they are copied once, straight to the wire. Refuses a payload past `PROTOCOL_MAX_DATA - PROTOCOL_STATUS_LEN` with `-3` (see the gap below) |
-| `0x0001` RESTART_APP | Replies `PROTOCOL_OK` **first**, logs, waits `COMMAND_RESTART_GRACE_MS` (100 ms), then `esp_restart()`. Returns the never-transmitted `PROTOCOL_ERR_CRC` as an internal "already answered", so the caller does not send a second reply |
-| `0x0101` Set BOOT_SLOT | Rejects a slot that is neither 0 nor 1 with `-4`; otherwise `esp_ota_set_boot_partition()`. A failure is `-5`, not `-6`: a slot whose image does not validate is a state a host can fix by transferring one |
-| `0x0201` VERSION | `[0:16]` from `esp_app_get_description()`, `[16:32]` from `esp_ota_get_partition_description()` on the `app_firmware` slot. A slot with no image leaves **sixteen zero bytes and answers OK** — "unset" is an answer, not a failure, so no second command is needed to tell them apart |
+| `0x0001` RESTART_APP | Replies `PROTOCOL_OK` **first**, logs, then `bsp_restart(COMMAND_RESTART_GRACE_MS)`, which waits 100 ms and resets. Returns the never-transmitted `PROTOCOL_ERR_CRC` as an internal "already answered", so the caller does not send a second reply |
+| `0x0101` Set BOOT_SLOT | Rejects a slot that is neither 0 nor 1 with `-4`; otherwise `ota_boot_slot_set()`. A failure is `-5`, not `-6`: a slot whose image does not validate is a state a host can fix by transferring one |
+| `0x0201` VERSION | `[0:16]` from `ota_running_version_get()`, `[16:32]` from `ota_slot_version_get(PROTOCOL_SLOT_FIRMWARE, ...)`. Both write straight into the reply field, bounded by its width. A slot with no image leaves **sixteen zero bytes and answers OK** — "unset" is an answer, not a failure, so no second command is needed to tell them apart |
 | `0x0202` Get BOOT_SLOT | Maps the running partition's subtype to the wire encoding. Neither OTA slot is `-6`, which no `partitions.csv` in this repo can produce |
-| `0x0203`/`0x0204` | `esp_read_mac()` for `ESP_MAC_WIFI_STA` / `ESP_MAC_BT`; a failure is `-6` |
+| `0x0203`/`0x0204` | `bsp_mac_get()` for `BSP_MAC_WIFI` / `BSP_MAC_BLE`; a failure is `-6` |
 | `0x0601`/`0x0602`/`0x0603` | Routed to [usb-upgrade-session.md](usb-upgrade-session.md) |
 
 **Set and Get BOOT_SLOT are asymmetric on purpose.** Set writes `otadata` for
@@ -3014,7 +3247,7 @@ read, so the 100 ms covers the host still having to be scheduled; a 16-byte
 frame is gone in well under a millisecond, so the wait is generous by two orders
 of magnitude and costs nothing before a reboot.
 
-On target `esp_restart()` never returns, so the only place this can be checked
+On target `bsp_restart()` never returns, so the only place this can be checked
 is the host suite: the fake counts resets instead of performing one, and the test
 asserts the reply was captured while that count was still zero.
 
@@ -3035,7 +3268,7 @@ carries a status and nothing else — which is exactly why `PROTOCOL_MAX_DATA` i
 - [usb-host-flow.md](usb-host-flow.md) — the sequence a host runs
 
 ### [behavior] USB Upgrade Session
-*`behavior/usb-upgrade-session.md` - The chunked image transfer over USB - what is checked before anything is erased, the chunk rules, and how a session ends. - status: active - source: middleware/command/src/command_upgrade.c, middleware/command/include/command.h, middleware/command/test/test_command.c - keywords: command_upgrade_begin, command_upgrade_write, command_upgrade_end, command_upgrade_t, chunk_max, img_crc32, esp_ota_begin, esp_ota_write, esp_ota_end, esp_ota_abort, no abort opcode*
+*`behavior/usb-upgrade-session.md` - The chunked image transfer over USB - what is checked before anything is erased, the chunk rules, and how a session ends. - status: active - source: middleware/command/src/command_upgrade.c, middleware/command/include/command.h, middleware/command/test/test_command.c - keywords: command_upgrade_begin, command_upgrade_write, command_upgrade_end, command_upgrade_t, chunk_max, img_crc32, ota_session_begin, ota_session_write, ota_session_end, ota_session_abort, ota_session_t, no abort opcode*
 
 # USB Upgrade Session
 
@@ -3060,7 +3293,7 @@ carries a status and nothing else — which is exactly why `PROTOCOL_MAX_DATA` i
 
 ## UPG_BEGIN: everything checked before anything is erased
 
-In this order, and all of it before `esp_ota_begin()`:
+In this order, and all of it before `ota_session_begin()` - which erases the slot:
 
 | Check | Failure |
 |-------|---------|
@@ -3125,7 +3358,7 @@ is last from `img_size`, so nothing says so on the wire.
 The CRC is folded as the bytes go by, so `UPG_END` needs no second pass over
 13 MB of flash.
 
-A failed `esp_ota_write()` is `-6` and **advances nothing**, so the host may
+A failed `ota_session_write()` is `-6` and **advances nothing**, so the host may
 retry the same chunk at the same offset.
 
 ## UPG_END: verify, finalise, arm nothing
@@ -3135,7 +3368,7 @@ retry the same chunk at the same offset.
 | no session open | `-5` |
 | `written` short of `img_size` | `-5`, and **the session stays open** — the transfer is simply unfinished, so the host carries on rather than starting over |
 | the running CRC does not match `img_crc32` | `-6`, the session is discarded, and the slot is **not** finalised |
-| `esp_ota_end()` refused | `-6`; the vendor call frees the session either way, so it is not aborted twice |
+| `ota_session_end()` refused | `-6`; the driver releases the session either way, which its contract states, so it is not aborted twice |
 | otherwise | `PROTOCOL_OK` |
 
 A CRC mismatch is `-6` rather than `-4` because the device cannot tell a wrong
@@ -3278,7 +3511,7 @@ hook can never disagree.
 - [coding-standard-source.md](coding-standard-source.md) — the standard behind these values
 
 ### [rule] Testing
-*`rule/testing.md` - Where a test lives, how to run it without a board, and how to tell a test that passes from a test that works. - status: active - source: test/host/CMakeLists.txt, test/host/runner.c, test/host/stub/esp_log.h, middleware/fw/test/test_fw.c, application/updater/test/test_updater.c, .github/workflows/ci.yml - keywords: Unity, ctest, test/host, runner.c, UNITY_DIR, host_tests, esp_log stub, mutation*
+*`rule/testing.md` - Where a test lives, how to run it without a board, and how to tell a test that passes from a test that works. - status: active - source: test/host/CMakeLists.txt, test/host/runner.c, test/host/stub/esp_log.h, middleware/fw/test/test_fw.c, application/updater/test/test_updater.c, .github/workflows/ci.yml - keywords: Unity, ctest, test/host, runner.c, UNITY_DIR, host_tests, esp_log stub, mutation, fake, stub, ota_fake, bsp_fake, nvs_fake, driver fake, 83 tests*
 
 # Testing
 
@@ -3365,6 +3598,39 @@ cmake -S test/host -B build/host -G Ninja -DUNITY_DIR=<dir containing unity.c>
 There are no on-target tests. `test/` holds only the host harness; an on-target
 smoke test that boots, exercises every peripheral once and prints a verdict is
 the last gate before a release tag, and it does not exist.
+
+## `fake/` and `stub/` mean different things
+
+`test/host/` has two directories and the difference is the whole point:
+
+| Directory | Holds | Contents today |
+|-----------|-------|----------------|
+| `fake/` | Host implementations of **our own** driver headers | `ota_fake.c`, `bsp_fake.c`, `nvs_fake.c` |
+| `stub/` | Shadows of **vendor** headers, first on the include path | `esp_log.h`, `esp_rom_crc.h`, `esp_err.h`, `nvs.h`, `nvs_flash.h` |
+
+A test of middleware belongs in the first column. Before `driver/ota` and
+`driver/bsp` existed, the tests for `middleware/command` had to shadow
+`esp_ota_ops.h`, `esp_partition.h`, `esp_mac.h` and `esp_system.h` and pretend
+to be ESP-IDF — nine stub files in all. Seven of them were deleted once
+middleware stopped calling the SDK. What is left in `stub/` is there for
+`driver/storage`, whose own tests have nothing below them to fake, plus the log
+sink and one deliberate exception:
+
+**`stub/esp_rom_crc.h` is not stubbing anything any more.** No firmware source
+includes it. It is kept as an independent bitwise CRC-32 written straight from
+the polynomial, so the protocol tests build their frames with one
+implementation while the parser checks them with `fw_crc32_le()` — the two are
+only interchangeable if they agree, and
+`test_fw_crc32_agrees_with_an_independent_implementation` compares them
+directly over 256 lengths.
+
+Each fake carries a control surface (`<mod>_fake_reset`, forced failures,
+observers) and **every test calls the reset first** (R-TST-05). The counts that
+matter are observable: `ota_fake_open_sessions()` proves a session was freed
+rather than leaked, and `nvs_fake_write_count()` proves the wear guard skipped
+a redundant write.
+
+The suite is **83 tests** as of 2026-09-07.
 
 ## See also
 
@@ -3462,7 +3728,7 @@ logic. A check with no subject is a check that only produces false positives.
 
 | Trigger | What it would catch |
 |---------|---------------------|
-| The OTA download path starts writing flash with offset/length arithmetic (`drain_body` into `esp_ota_write`) | A write past the end of the slot, a length that underflows |
+| The OTA download path starts writing flash with offset/length arithmetic (`drain_body` into `ota_session_write`) | A write past the end of the slot, a length that underflows |
 | A manifest parser appears | Reading past a buffer on a malformed response |
 | Any module starts calling `malloc`/`calloc`/`free` | Leak, double-free, use-after-free |
 | Anything opens a file, socket or `esp_http_client` handle outside a single function | A handle leaked on the error path |
@@ -3632,11 +3898,11 @@ when `auto_push` is set, and never auto-pushes `protected_branches`
 rulesets (no deletion, no force-push; `main` also requires a pull request).
 
 ### [rule] Known Deviations and Open Holes
-*`rule/known-deviations.md` - Every place this repo departs from the house standard on purpose, plus the unfinished work that must not ship. - status: active - source: application/app/src/app.c:176-193, application/updater/src/updater.c:200-215, middleware/storage/src/storage.c:182-207, driver/bsp/src/bsp.c:22-33, CHANGELOG.md, conversation - keywords: SPEC-DEVIATION, TODO, R-VER-08, R-RPO-06, R-RPO-01, gap, self-test, migration, usb, console UART0, PROTOCOL_ERR_UNSUPPORTED, PING ceiling*
+*`rule/known-deviations.md` - Every place this repo departs from the house standard on purpose, plus the unfinished work that must not ship. - status: active - source: application/app/src/app.c:176-193, application/updater/src/updater.c:200-215, driver/storage/src/storage.c, driver/bsp/src/bsp.c:22-33, CHANGELOG.md, conversation - keywords: SPEC-DEVIATION, TODO, R-VER-08, R-RPO-06, R-RPO-01, R-LAY-01, R-LAY-04, gap, self-test, migration, usb, console UART0, PROTOCOL_ERR_UNSUPPORTED, PING ceiling, esp_log exception, esp_http_client exception, mapped driver*
 
 # Known Deviations and Open Holes
 
-> Nine deliberate departures and six unfinished holes; the holes are the list that must be empty before a field release.
+> Eleven deliberate departures and six unfinished holes; the holes are the list that must be empty before a field release.
 
 ## When this applies
 
@@ -3649,13 +3915,15 @@ this repo does not match the standard.
 |---|------|------------------------------|-----|
 | 1 | `R-RPO-06` | Developer scripts live in `docs/scripts/`, not a repo-root `scripts/` | User decision. `spec-verify` will flag it. If it is to stay, change the standard rather than letting each repo drift. |
 | 2 | `R-RPO-01` | A `<mod>_priv.h` exists only in `application/app/` | The private header is the home for declarations shared across split parts; no module is split yet. The one that exists carries the `app_main` prototype that `-Wmissing-prototypes` demands. |
-| 3 | LOG doc prose | No `LOG_E`/`LOG_W`/`LOG_I` wrapper; the SDK log macros are used directly with the module `TAG` | A wrapper usable by `driver/bsp/` would have to sit below the driver layer, which is exactly where the SDK's own logging already sits. Every numbered LOG rule still holds. |
+| 3 | LOG doc prose | No `LOG_E`/`LOG_W`/`LOG_I` wrapper; the SDK log macros are used directly with the module `TAG` | A wrapper usable by `driver/bsp/` would have to sit below the driver layer, which is exactly where the SDK's own logging already sits. Every numbered LOG rule still holds. This is also **exception 1** to this repo's middleware-calls-only-drivers rule - see [layer-boundaries.md](layer-boundaries.md). |
 | 4 | `R-RPO-09` tree | No `third_party/`; `test/` holds only the host harness, no on-target test | Nothing to put in `third_party/` yet. The on-target smoke test is missing, which is a hole rather than a departure — see below. |
 | 5 | naming | The project-wide status is `fw_err_t`, not the `updater_err_t` first proposed | `updater_err_t` would collide with the `updater` module's symbol prefix, and a grep for a prefix must land in exactly one place. `fw_err_t` is the standard's own name for the app-wide type. |
 | 6 | `R-VER-13` | Once anything is released, the changelog splits one-file-per-version under `docs/CHANGELOG/`; the root `CHANGELOG.md` keeps `[Unreleased]` plus an index. In use since v0.1.0 | User decision. The standard wants one newest-first file, so a reader or tool looking for "what changed in 0.1.0" no longer finds it in the conventional place. The index table is what keeps the trail followable. |
 | 7 | source USB spec | The console and boot log are on **UART0** (GPIO43/44), not on USB-Serial-JTAG as the source spec's product has them | Not a choice. ESP32-S3 has one internal USB PHY, time-division shared between USB-OTG and USB-Serial-JTAG (TRM 32.3.1, 33.3.1), and TinyUSB claims it during install. Keeping the log on USB-Serial-JTAG would silence it the moment the command channel came up. **Cost:** `tool-esp.py flash` loses its USB auto-download reset - flash over UART0, or hold BOOT. Never burn `EFUSE_USB_PHY_SEL` to "fix" this: it is one-way and removes USB-Serial-JTAG download in the bootloader too. |
 | 8 | source USB spec | 36 of the 46 defined opcodes answer `PROTOCOL_ERR_UNSUPPORTED` (`-7`) - the whole ATE range, all of Config, every Wi-Fi and network item, and `FACTORY_RESET` | The spec was written for product 0x0001, which has an LCD, touch panel, SD card, Ethernet, Wi-Fi and a config registry. This board has none of them. `-7` is the spec's own answer for "the opcode is right, this build cannot serve it", and it is the honest one: a stub returning OK would ship a unit carrying a check that never checked anything. See [../interface/command-map.md](../interface/command-map.md). |
 | 9 | source USB spec | `PING` refuses a payload above **32768** bytes with `-3`, not the `PROTOCOL_MAX_DATA` (32772) the spec implies | The spec contradicts itself: it says PING echoes up to `PROTOCOL_MAX_DATA` bytes **and** that the reply carries `4 + REQ.LENGTH`, which at the cap asks for a frame past that same cap. Refusing the length beats truncating the echo. `UPG_WRITE` is unaffected - its reply is a status only, which is exactly why the cap is 32772. |
+| 10 | own rule, `R-LAY-01` read strictly | `middleware/ota_http` keeps `esp_http_client` and `esp-tls` in `PRIV_REQUIRES` - the one middleware component with an SDK dependency | **Exception 2** to [layer-boundaries.md](layer-boundaries.md). HTTP is a protocol stack, which the house layer table assigns to middleware; `driver/` is for "one device or peripheral role" and an HTTP client is not a device. Wrapping it would put a non-device in the driver layer to satisfy the letter of a rule whose purpose - the portability line at the driver/BSP seam (R-LAY-04) - it does not serve, since `esp_http_client` is portable across every ESP part this repo will build for. The vendor status still stops at the module boundary: `ota_http.c` has its own `from_esp_err()` and `ota_http_t` holds its handle as `void *`. |
+| 11 | `R-LAY-01` table | This repo forbids what the standard's own table permits: middleware may **not** call "HAL primitives" directly, only mapped drivers | Stricter than the standard, not looser, so `spec-verify` will not flag it - but it is a departure and belongs here. The looser reading is what produced the defect: `command_upgrade_begin()` called `esp_ota_begin()`, which nailed the USB upgrade path to one vendor and left its tests impersonating ESP-IDF. Written up with both greps in [layer-boundaries.md](layer-boundaries.md). |
 
 ## Open holes (must be empty before a field release)
 
@@ -3664,7 +3932,7 @@ this repo does not match the standard.
 | 1 | `app.c`, `confirm_or_roll_back()` | `SPEC-DEVIATION(R-VER-08)` — the new image confirms itself with **no self-test** | A broken image marks itself valid and rollback never fires. This defeats the product's whole reason to exist. **Shipped in v0.1.0**, listed in that release's notes. |
 | 2 | `updater.c`, `step_checking()` | Not implemented — never finds an update | The updater never updates. Fails safe, but does nothing. |
 | 3 | `updater.c`, `step_downloading()` | Not implemented | Unreachable today. |
-| 4 | `storage.c`, `record_validate()` | No migration between record versions | Adding a field silently costs every deployed unit its stored settings. |
+| 4 | `cfg.c`, `record_validate()` | No migration between record versions | Adding a field silently costs every deployed unit its stored settings. |
 | 5b | v0.1.0 assets | Its published files cannot flash a blank board: `ota_data_initial.bin` missing, `flash_args` paths not flat | Anyone provisioning from that release has to read the offsets out of the notes by hand. Fixed for the next tag; v0.1.0 itself cannot be changed, because a tag never moves. |
 | 5 | `bsp.c` board table | GPIO, polarity and flash size are placeholders, never checked against a schematic | The LED drives the wrong pin, or a pin that is wired to something else. |
 | 6 | `partitions.csv` | Only ONE updater image exists — the two app slots hold different programs | A bad updater has no slot to roll back to. See [../data/flash-and-partitions.md](../data/flash-and-partitions.md). |
@@ -3691,3 +3959,134 @@ Two more, outside the source:
 
 - [coding-standard-source.md](coding-standard-source.md) — how to resolve the rule IDs above
 - [../behavior/boot-and-bring-up.md](../behavior/boot-and-bring-up.md) — hole 1 in context
+
+### [rule] Middleware Calls Only Mapped Drivers
+*`rule/layer-boundaries.md` - The rule that keeps the vendor SDK out of middleware and application code, its two named exceptions, and the grep that enforces it. - status: active - source: driver/ota/include/ota.h, driver/bsp/include/bsp.h, driver/storage/include/storage.h, middleware/fw/include/fw.h, middleware/command/src/command_upgrade.c, middleware/ota_http/src/ota_http.c - keywords: R-LAY-01, R-LAY-03, R-LAY-04, mapped driver, wrapper, esp_ota_begin, esp_log, esp_http_client, esp_rom_crc32_le, nvs, layering, portability line, driver fake*
+
+# Middleware Calls Only Mapped Drivers
+
+> A file under `middleware/` or `application/` calls a driver in `driver/`, never the vendor SDK directly — with exactly two exceptions, both named below.
+
+## When this applies
+
+Whenever you are about to write `#include "esp_...h"`, `#include "nvs...h"`,
+`#include "driver/...h"`, `#include "soc/...h"` or `#include "freertos/...h"`
+in a file under `middleware/` or `application/`. Also when reviewing a diff
+that adds one.
+
+## The rule
+
+`R-LAY-01` in the house standard says calls go down and no layer includes a
+header from the layer above it. Its table also lets middleware call "HAL
+primitives", which read on its own permits `esp_ota_begin()` in
+`middleware/command`. **This repo reads it more strictly than that**, because
+the looser reading is what produced the defect this rule was written after:
+`command_upgrade_begin()` called `esp_ota_begin()` directly, so the USB upgrade
+path — the product's entire bench and production route — was nailed to one
+vendor's SDK, and its tests could only run by shadowing vendor headers with
+fakes that pretended to be ESP-IDF.
+
+So, here:
+
+| Layer | May include | Must not |
+|-------|-------------|----------|
+| `application/` | `middleware/`, `driver/`, the two exceptions | Any other vendor header |
+| `middleware/` | `driver/`, sibling `middleware/`, the two exceptions | Any other vendor header |
+| `driver/` | The vendor SDK, freely — this is its job | A header from `middleware/` or `application/` |
+
+A capability the vendor SDK provides and middleware needs gets a **mapped
+driver**: a module under `driver/` with its own `<mod>_err_t` code space
+(R-LAY-03 — no `esp_err_t` above the driver layer), its own opaque handle type
+where the SDK has one, and a `from_esp_err()` private helper that is the last
+place the vendor status exists.
+
+The four that exist:
+
+| Driver | Wraps | Handle type it hides |
+|--------|-------|----------------------|
+| `driver/ota` | `esp_ota_*`, `esp_partition_*`, `esp_app_get_description` | `ota_session_t` over `esp_ota_handle_t` |
+| `driver/bsp` | GPIO, `esp_flash`, `esp_read_mac`, `esp_restart`, chip pin headers | — |
+| `driver/storage` | `nvs_*`, `nvs_flash_*` | `uint32_t` over `nvs_handle_t` |
+| `driver/usb_cdc` | TinyUSB | — |
+
+A pure function with no hardware behind it does not need a driver — it needs a
+home in `middleware/fw`, the dependency-free leaf. `fw_crc32_le()` is the
+worked example: it replaced `esp_rom_crc32_le()` in three modules for 128 bytes
+of image, and it is checked against records and frames that outlive any one
+chip, so it may not depend on one chip's ROM.
+
+## The two exceptions
+
+**1. `esp_log.h`.** Every module keeps using `ESP_LOGE`/`ESP_LOGW`/`ESP_LOGI`
+with its own `TAG`. A wrapper usable by `driver/bsp` would have to sit *below*
+the driver layer, which is precisely where the SDK's own logging already sits —
+so the wrapper would buy nothing and cost an edit at every log line in the
+repo. This is the same reasoning already recorded as deviation 3 in
+[known-deviations.md](known-deviations.md); the host harness shadows
+`esp_log.h` with a sink, which is all a test needs.
+
+**2. `middleware/ota_http` keeps `esp_http_client`.** HTTP is a protocol stack,
+and the house layer table assigns protocols and stacks to *middleware*, not to
+`driver/`, whose remit is "one device or peripheral role". An HTTP client is
+not a device. Wrapping it in `driver/` would put a non-device in the driver
+layer to satisfy the letter of a rule whose purpose — R-LAY-04, the portability
+line at the driver/BSP seam — it does not serve: `esp_http_client` is portable
+across every ESP part this repo will ever build for. The vendor status still
+stops at the module boundary: `ota_http.c` has its own `from_esp_err()` and
+`ota_http_t` holds its handle as `void *`.
+
+Both exceptions are recorded in [known-deviations.md](known-deviations.md) as
+deliberate, so a reviewer finds a decision there rather than an oversight.
+
+## How to check it
+
+Two greps, and they are the same ones each refactor was gated on. Firmware
+sources only — `*/src` and `*/include` — because the test tree deliberately
+keeps an independent CRC-32 reference under `test/host/stub/esp_rom_crc.h` for
+`fw_crc32_le()` to be compared against:
+
+```bash
+# Anything vendor-shaped in middleware, except the one permitted include.
+grep -rn '#include "esp_\|#include "nvs\|#include "freertos/\|#include "soc/\|#include "driver/' \
+     middleware/*/src middleware/*/include | grep -v 'esp_log.h' | grep -v 'ota_http'
+
+# The specific APIs that used to be called directly.
+grep -rn 'esp_ota_\|esp_partition_\|nvs_\|esp_restart\|esp_read_mac\|esp_rom' \
+     middleware/*/src middleware/*/include application/*/src application/*/include
+```
+
+The first must come back empty. The second is expected to return **comment
+prose only** — as of 2026-09-07, exactly two lines: `middleware/fw/include/fw.h`
+naming the ROM routine `fw_crc32_le()` replaced, and the `TODO` in
+`application/updater/src/updater.c` saying *not* to call `esp_ota_*` when the
+DOWNLOADING step is written. A hit on a line that is not a comment is the
+violation.
+
+Neither grep is wired into CI yet — that is a hole, not a claim: today the rule
+is enforced at review with these two commands. Both were run against the tree
+this doc was written from.
+
+## Why it is worth the wrapper
+
+The reason is not tidiness. Three things fall out of it that did not exist
+before:
+
+- **A host test of middleware fakes a contract we own.** `test/host/fake/`
+  holds `ota_fake.c`, `bsp_fake.c` and `nvs_fake.c` — implementations of *our*
+  headers. Before, `test/host/stub/` held nine files impersonating ESP-IDF; it
+  now holds two, and one of those is a deliberate second opinion rather than a
+  stub.
+- **The port to another part is a directory, not a search.** Every vendor call
+  is under `driver/`, so there is a finite list to rewrite and nothing above it
+  to audit (R-LAY-04).
+- **A feature can be compiled out.** `FW_FEATURE_USB_COMMAND` in
+  `middleware/fw/include/fw_config.h` removes the USB channel from the image
+  because the wiring is in one file and every dependency is named. Turning it
+  off frees 67 688 bytes of `.bss`, measured.
+
+## See also
+
+- [../architecture/layering-and-dependencies.md](../architecture/layering-and-dependencies.md) — the component graph this rule produces
+- [known-deviations.md](known-deviations.md) — where both exceptions are recorded
+- [coding-standard-source.md](coding-standard-source.md) — how to resolve `R-LAY-01` itself
+- [testing.md](testing.md) — the driver fakes the rule made possible

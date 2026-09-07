@@ -72,12 +72,35 @@ updated: 2026-09-07
 - **v0.1.0 is released**, cut end to end by `tool-release.py`: seven phases, two
   merged pull requests, an annotated tag on `main`, and eight published
   artifacts. Both workflows green on the runs that produced it.
+- **Middleware calls mapped drivers, not the vendor SDK.** Verified by the two
+  greps in [rule/layer-boundaries.md](rule/layer-boundaries.md), not by
+  reading: no vendor include in any middleware source but `esp_log.h` and
+  `ota_http`'s HTTP client, and no `esp_ota_*` / `esp_partition_*` / `nvs_*` /
+  `esp_restart` / `esp_read_mac` / `esp_rom` anywhere in `middleware/` or
+  `application/` outside two lines of deliberate comment prose. `driver/` holds
+  four modules now: `bsp`, `ota`, `storage`, `usb_cdc`.
+- **83 host tests, green**, up from 69, built under the firmware's own
+  `-Werror` warning set. Eleven of the new ones are the blob store's first
+  tests ever. **Three assertions were proved to have teeth by mutation**, not
+  assumed: one wrong nibble in the CRC table reddens both the direct comparison
+  against an independent implementation and every protocol frame test; deleting
+  the read-compare-write guard reddens exactly the wear test at 11 writes
+  instead of 1; `bsp_restart(0U)` reddens exactly the RESTART_APP ordering test.
+- **A feature can be compiled out, measured rather than assumed.**
+  `FW_FEATURE_USB_COMMAND` at 0 builds clean and frees **67 688 bytes of
+  `.bss`** — 20.66 % of DRAM down to 0.85 % — plus 41.4 KB of flash;
+  `FW_FEATURE_UPDATER` at 0 builds clean and leaves `updater_step` with no
+  address at all in `app_updater.map`. Both restored to 1 and the baseline size
+  returns exactly.
+- **The factory image says what it is.**
+  `tool-esp.py merge` produces `bl_app_updater_0xF001_Sep0726.bin`, every field
+  read from the build; `release.yml` copies it by glob and fails unless exactly
+  one matches.
 - **A settings library with a persistence seam, `middleware/cfg`.** It owns the
   record, the defaults and one validated get/set pair per setting; where the
   bytes go arrives as a two-callback adapter, so `cfg` names no storage
-  technology and `middleware/storage` shrank to an opaque NVS blob store. The
-  host suite went from 56 tests to **69, all green**, and one of the new ones
-  was **proved to have teeth by mutation**: deleting the
+  technology and the blob store it forwards to is now `driver/storage`. One of
+  its tests was **proved to have teeth by mutation**: deleting the
   `CFG_CHECK_INTERVAL_MAX_MS` guard from the setter reddens exactly
   `test_cfg_check_interval_refuses_the_scheduling_horizon` and nothing else.
   Restoring it returns the suite to green.
@@ -97,16 +120,21 @@ updated: 2026-09-07
 2. **A self-test in `confirm_or_roll_back()`** — the highest-value hole. Until
    it exists, a broken image confirms itself and rollback never fires.
 3. `updater` `CHECKING` step: fetch the manifest, compare versions, decide.
-4. `updater` `DOWNLOADING` step: drive the fetch into the OTA write API, set the
-   boot partition. The USB path already does this work in
-   `middleware/command/src/command_upgrade.c`; the HTTP path should reuse the
-   same session rules rather than growing a second set.
+4. `updater` `DOWNLOADING` step: drive the fetch into `ota_session_write()`,
+   then `ota_boot_slot_set()`. The USB path already runs those session rules in
+   `middleware/command/src/command_upgrade.c`; the HTTP path should reuse them
+   rather than growing a second set. **Never `esp_ota_*` directly** — see
+   [rule/layer-boundaries.md](rule/layer-boundaries.md).
 5. Network bring-up (Wi-Fi or Ethernet) — not in this repo at all.
 6. **Flash and boot v0.1.0 on real hardware.** Nothing has ever executed on a
    board, so everything about the flash layout is still arithmetic.
 7. An **on-target** smoke test. The host suite runs; nothing exercises a board.
 8. Record migration in `middleware/cfg` (`record_validate()` carries the
    TODO), before any field release.
+8b. **Wire the two layer-boundary greps into CI.** Today the rule in
+   [rule/layer-boundaries.md](rule/layer-boundaries.md) is enforced at review,
+   which means it is enforced when someone remembers. It is the only new rule
+   in the repo with no automated gate.
 9. Enable `gcc -fanalyzer` — deferred on purpose, not forgotten. The trigger is
    the first code that does buffer arithmetic, parsing, or allocation; see
    [rule/static-analysis.md](rule/static-analysis.md) for the exact list and the
@@ -144,12 +172,21 @@ updated: 2026-09-07
   never by silencing the warning.
 
 - ⚠ **Nothing in the firmware calls `cfg_save()`.** Settings are read at boot
-  and never written — unchanged from before the refactor, when
-  `storage_record_save()` had no caller either — so the linker drops
-  `cfg_save` from the image. The API and its tests exist; the first writer will
-  be whatever records `last_ok_fw_version` or `boot_fail_count`. Until then a
-  setting changed at runtime is lost on reset.
-- ⚠ `application/updater/CMakeLists.txt` still declares `PRIV_REQUIRES ...
-  storage`, but `updater.c` includes no header of it. A dead dependency, found
-  while wiring `cfg` and deliberately left alone: removing it is not this
-  change's business.
+  and never written, so the linker drops `cfg_save` from the image. The API and
+  its tests exist; the first writer will be whatever records
+  `last_ok_fw_version` or `boot_fail_count`. Until then a setting changed at
+  runtime is lost on reset. `storage_blob_save()` now has host tests either
+  way, including the wear guard, so the persistence half is no longer unproven
+  — only uncalled.
+- ⚠ **The factory image name has no time of day.** Two builds on the same day
+  produce the same `bl_..._Sep0726.bin` and the second overwrites the first
+  without a word. Deliberate, marked with a `ponytail:` comment in
+  `tool-esp.py` naming `-%H%M` as the upgrade.
+- ⚠ **`driver/ota` is new code on the path that writes flash and has never run
+  on a board.** Its host fake proves the contract; only hardware proves the
+  implementation.
+- ⚠ `application/updater/CMakeLists.txt` still declares `PRIV_REQUIRES
+  ota_http app_update esp_partition`, none of which `updater.c` includes. The
+  dead `storage` entry went when that module moved to `driver/`; these three
+  stay because the CHECKING and DOWNLOADING steps are written against them.
+  They are a lie until those steps exist.

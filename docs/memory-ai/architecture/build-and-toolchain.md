@@ -4,10 +4,10 @@ category: architecture
 order: 3
 purpose: How the 0xF001 image is configured and compiled, including the main-less ESP-IDF build and the warning policy.
 status: active
-updated: 2026-09-06
+updated: 2026-09-07
 source: workspace/0xF001/CMakeLists.txt, workspace/0xF001/sdkconfig.defaults, VERSION, .clang-format
 confidence: confirmed
-keywords: EXTRA_COMPONENT_DIRS, COMPONENTS, house_warnings, PROJECT_VER, sdkconfig.defaults, idf.py, Werror, esp32s3
+keywords: EXTRA_COMPONENT_DIRS, COMPONENTS, house_warnings, PROJECT_VER, sdkconfig.defaults, idf.py, Werror, esp32s3, fw_config.h, FW_FEATURE_USB_COMMAND, FW_FEATURE_UPDATER, feature switch
 ---
 
 # Build and Toolchain
@@ -141,6 +141,25 @@ the changelog headings. See
   keeps the default.
 - `house_warnings()` must be defined before the IDF include so it is in scope in
   every component subdirectory.
+
+## Feature switches, and why they are not Kconfig
+
+`middleware/fw/include/fw_config.h` holds `FW_FEATURE_USB_COMMAND` and
+`FW_FEATURE_UPDATER`, both `1` by default. Setting one to `0` removes the
+calls, so the linker drops the feature from the image; the components still
+compile, which keeps a disabled feature from rotting while it is off.
+
+ESP-IDF's own mechanism for this is Kconfig, and it was not used, for one
+reason: a `CONFIG_*` symbol does not exist in the host test build, where
+`sdkconfig.h` is never generated. `#if CONFIG_FEATURE_X` would then silently
+evaluate to 0 in every host test — a switch that reads one way on target and
+the other way under test is worse than no switch. A plain header reads
+identically in both builds and is greppable in one place.
+
+The cost accepted: no `menuconfig` entry, and a product-specific answer means a
+header under `workspace/<pid>/` with that directory ahead of
+`middleware/fw/include` on the include path. Worth revisiting only when a
+second product actually disagrees.
 
 ## See also
 

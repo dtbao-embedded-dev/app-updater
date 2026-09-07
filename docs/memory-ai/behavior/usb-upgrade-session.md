@@ -7,7 +7,7 @@ status: active
 updated: 2026-09-07
 source: middleware/command/src/command_upgrade.c, middleware/command/include/command.h, middleware/command/test/test_command.c
 confidence: confirmed
-keywords: command_upgrade_begin, command_upgrade_write, command_upgrade_end, command_upgrade_t, chunk_max, img_crc32, esp_ota_begin, esp_ota_write, esp_ota_end, esp_ota_abort, no abort opcode
+keywords: command_upgrade_begin, command_upgrade_write, command_upgrade_end, command_upgrade_t, chunk_max, img_crc32, ota_session_begin, ota_session_write, ota_session_end, ota_session_abort, ota_session_t, no abort opcode
 ---
 
 # USB Upgrade Session
@@ -33,7 +33,7 @@ keywords: command_upgrade_begin, command_upgrade_write, command_upgrade_end, com
 
 ## UPG_BEGIN: everything checked before anything is erased
 
-In this order, and all of it before `esp_ota_begin()`:
+In this order, and all of it before `ota_session_begin()` - which erases the slot:
 
 | Check | Failure |
 |-------|---------|
@@ -98,7 +98,7 @@ is last from `img_size`, so nothing says so on the wire.
 The CRC is folded as the bytes go by, so `UPG_END` needs no second pass over
 13 MB of flash.
 
-A failed `esp_ota_write()` is `-6` and **advances nothing**, so the host may
+A failed `ota_session_write()` is `-6` and **advances nothing**, so the host may
 retry the same chunk at the same offset.
 
 ## UPG_END: verify, finalise, arm nothing
@@ -108,7 +108,7 @@ retry the same chunk at the same offset.
 | no session open | `-5` |
 | `written` short of `img_size` | `-5`, and **the session stays open** — the transfer is simply unfinished, so the host carries on rather than starting over |
 | the running CRC does not match `img_crc32` | `-6`, the session is discarded, and the slot is **not** finalised |
-| `esp_ota_end()` refused | `-6`; the vendor call frees the session either way, so it is not aborted twice |
+| `ota_session_end()` refused | `-6`; the driver releases the session either way, which its contract states, so it is not aborted twice |
 | otherwise | `PROTOCOL_OK` |
 
 A CRC mismatch is `-6` rather than `-4` because the device cannot tell a wrong

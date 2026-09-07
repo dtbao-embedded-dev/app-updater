@@ -11,6 +11,21 @@ below, and leaves a fresh empty `[Unreleased]` here.
 ## [Unreleased]
 
 ### Changed
+- **`tool-esp.py` no longer hardcodes the product workspace.** A workspace is
+  any directory under `workspace/` holding a `CMakeLists.txt`, so that listing
+  is the list of products; the default comes from `WORKSPACE=` in `.env.esp`
+  and `-w NAME` overrides it for one run. **Naming the product is required**,
+  including while the repo holds exactly one workspace: nothing is inferred,
+  because a product nobody chose is a product nobody checked and a build against
+  the wrong one looks exactly like a build that worked. So fill `WORKSPACE=` in
+  once per machine; `ci.yml` and `release.yml` pass `-w 0xF001` on their five
+  build steps, a runner having no `.env.esp`, and that flag is now the only
+  place those workflows state which product they build. `-w` is rejected for
+  `format`, `test` and `analyse`, which cover the whole repo. The `.env.esp`
+  template documents the case with the refusal it is answering - interpolated
+  from the same function that prints it, so the two cannot drift - and that
+  refusal creates the file when it is missing rather than naming a file a fresh
+  clone does not have yet.
 - **The console and boot log moved to UART0** (GPIO43/44). ESP32-S3 has a single
   internal USB PHY shared between USB-OTG and USB-Serial-JTAG, and the USB
   command channel claims it - so a log left on USB-Serial-JTAG would go silent.

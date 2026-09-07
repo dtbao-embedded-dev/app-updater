@@ -39,9 +39,14 @@ A checkout is not enough: its tools are installed once with
 `install.bat esp32s3` (or `install.sh esp32s3`), and the script says exactly
 that, quoting ESP-IDF's own error, when they are missing.
 
-Builds product **0xF001**, the only workspace in this repo. The version comes
-from the `VERSION` file and is injected into the image header, so the number the
-firmware reports on boot is that file and nothing else.
+**Say which product**: `WORKSPACE=0xF001` in `.env.esp`, or `-w 0xF001` per
+run. This is required even though `workspace/0xF001/` is the only workspace in
+the repo — nothing is inferred, because a product nobody chose is a product
+nobody checked, and a build against the wrong one looks exactly like a build
+that worked. Add `workspace/0xF002/` and the refusal simply lists both.
+
+The version comes from the `VERSION` file and is injected into the image header,
+so the number the firmware reports on boot is that file and nothing else.
 
 The repo root has **no** `CMakeLists.txt` — the build entry lives in
 `workspace/0xF001/`, which is why every command goes through the wrapper.

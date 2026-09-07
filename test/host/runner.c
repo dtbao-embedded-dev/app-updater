@@ -19,6 +19,9 @@
 void test_fw_err_str_names_every_defined_code(void);
 void test_fw_err_only_ok_is_non_negative(void);
 void test_fw_err_str_rejects_an_unknown_code(void);
+void test_fw_crc32_matches_the_known_answer_vector(void);
+void test_fw_crc32_chains_across_two_buffers(void);
+void test_fw_crc32_agrees_with_an_independent_implementation(void);
 
 void test_protocol_crc_matches_the_known_answer_vector(void);
 void test_protocol_round4_pads_to_the_four_byte_boundary(void);
@@ -109,6 +112,9 @@ int main(void)
     RUN_TEST(test_fw_err_str_names_every_defined_code);
     RUN_TEST(test_fw_err_only_ok_is_non_negative);
     RUN_TEST(test_fw_err_str_rejects_an_unknown_code);
+    RUN_TEST(test_fw_crc32_matches_the_known_answer_vector);
+    RUN_TEST(test_fw_crc32_chains_across_two_buffers);
+    RUN_TEST(test_fw_crc32_agrees_with_an_independent_implementation);
 
     RUN_TEST(test_protocol_crc_matches_the_known_answer_vector);
     RUN_TEST(test_protocol_round4_pads_to_the_four_byte_boundary);

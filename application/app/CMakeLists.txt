@@ -16,8 +16,7 @@ idf_component_register(SRCS "src/app.c"
                                      esp_app_format
                                      esp_timer
                                      esp_hw_support
-                                     freertos
-                                     nvs_flash)
+                                     freertos)
 
 house_warnings(${COMPONENT_LIB})
 

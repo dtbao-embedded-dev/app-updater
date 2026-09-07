@@ -27,7 +27,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/stream_buffer.h"
 #include "freertos/task.h"
-#include "nvs_flash.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -91,6 +90,7 @@ static fw_err_t bring_up_updater(app_ctx_t *ctx);
 static fw_err_t bring_up_usb(app_ctx_t *ctx);
 static fw_err_t cfg_store_load(void *ctx, void *out, size_t cap, size_t *out_len);
 static fw_err_t cfg_store_save(void *ctx, const void *data, size_t len);
+static fw_err_t from_storage_err(storage_err_t err);
 static void on_usb_rx(void *ctx, const uint8_t *data, size_t len);
 static fw_err_t on_usb_reply(void *ctx, const uint8_t *data, size_t len);
 static bool is_slot_write_busy(void *ctx);
@@ -201,23 +201,11 @@ static void print_banner(void) {
 }
 
 static fw_err_t bring_up_storage(app_ctx_t *ctx) {
-    esp_err_t nvs_err = nvs_flash_init();
-    if ((nvs_err == ESP_ERR_NVS_NO_FREE_PAGES) || (nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND)) {
-        ESP_LOGW(TAG, "nvs unusable (esp_err=0x%x), erasing", (unsigned)nvs_err);
-        if (nvs_flash_erase() != ESP_OK) {
-            return FW_ERR_IO;
-        }
-        nvs_err = nvs_flash_init();
-    }
-    if (nvs_err != ESP_OK) {
-        ESP_LOGE(TAG, "nvs_flash_init failed: esp_err=0x%x", (unsigned)nvs_err);
-        return FW_ERR_IO;
-    }
-
     const storage_cfg_t st_cfg = storage_cfg_default();
-    const fw_err_t err         = storage_init(&ctx->storage, &st_cfg);
-    if (err != FW_OK) {
-        return err;
+    const storage_err_t err    = storage_init(&ctx->storage, &st_cfg);
+    if (err != STORAGE_OK) {
+        ESP_LOGE(TAG, "storage_init: %s", storage_err_str(err));
+        return from_storage_err(err);
     }
 
     /* The settings themselves live in middleware/cfg; storage is only where
@@ -241,12 +229,25 @@ static fw_err_t bring_up_storage(app_ctx_t *ctx) {
  * storage changing at all. */
 static fw_err_t cfg_store_load(void *ctx, void *out, size_t cap, size_t *out_len) {
     app_ctx_t *app = (app_ctx_t *)ctx;
-    return storage_blob_load(&app->storage, out, cap, out_len);
+    return from_storage_err(storage_blob_load(&app->storage, out, cap, out_len));
 }
 
 static fw_err_t cfg_store_save(void *ctx, const void *data, size_t len) {
     app_ctx_t *app = (app_ctx_t *)ctx;
-    return storage_blob_save(&app->storage, data, len);
+    return from_storage_err(storage_blob_save(&app->storage, data, len));
+}
+
+/* The driver keeps its own code space (R-LAY-01) but shares the generic
+ * -1..-19 meanings, so the map is one for one (R-ERR-03) and this is the only
+ * place in the image that has to know both. STORAGE_ERR_CRC reaching cfg as
+ * FW_ERR_CRC is what makes it fall back to the defaults rather than fail
+ * bring-up on a record it could not have parsed. */
+static fw_err_t from_storage_err(storage_err_t err) {
+    /* Only the shared generic range -1..-19 maps one for one. A code from the
+     * driver's own space (-20 and below) has no fw_err_t twin, so it arrives
+     * as a plain I/O failure rather than as a number fw_err_str() cannot
+     * name. */
+    return ((int)err >= -19) ? (fw_err_t)err : FW_ERR_IO;
 }
 
 static fw_err_t bring_up_bsp(app_ctx_t *ctx) {

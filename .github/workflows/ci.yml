@@ -161,5 +161,8 @@ jobs:
           curl -fsSL "${url}/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
             | tar -xz -C /usr/local/bin gitleaks
           gitleaks version
+      # --config is explicit rather than relying on gitleaks finding
+      # .gitleaks.toml itself: this job is a gate, and a gate that silently
+      # falls back to a different config than a developer runs is not one.
       - name: Scan
-        run: gitleaks detect --source . --redact --verbose
+        run: gitleaks detect --source . --config .gitleaks.toml --redact --verbose

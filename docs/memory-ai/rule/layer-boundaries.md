@@ -97,8 +97,9 @@ keeps an independent CRC-32 reference under `test/host/stub/esp_rom_crc.h` for
 grep -rn '#include "esp_\|#include "nvs\|#include "freertos/\|#include "soc/\|#include "driver/' \
      middleware/*/src middleware/*/include | grep -v 'esp_log.h' | grep -v 'ota_http'
 
-# The specific APIs that used to be called directly.
-grep -rn 'esp_ota_\|esp_partition_\|nvs_\|esp_restart\|esp_read_mac\|esp_rom' \
+# The specific APIs that used to be called directly, plus the ones a mapped
+# driver now owns and nothing above it may reach for.
+grep -rn 'esp_ota_\|esp_partition_\|esp_core_dump_\|nvs_\|esp_restart\|esp_read_mac\|esp_rom' \
      middleware/*/src middleware/*/include application/*/src application/*/include
 ```
 

@@ -7,7 +7,7 @@ status: active
 updated: 2026-09-07
 source: application/, middleware/, driver/, workspace/0xF001/, test/host/, .github/workflows/, docs/, README.md
 confidence: confirmed
-keywords: application, middleware, driver, bsp, usb_cdc, protocol, command, workspace, 0xF001, include, src, module directory
+keywords: application, middleware, driver, bsp, usb_cdc, coredump, protocol, command, workspace, 0xF001, include, src, module directory
 ---
 
 # Repository Layout
@@ -38,6 +38,7 @@ before anyone opens a header.
 | `driver/storage/` | One opaque blob in NVS, with a read-compare-write wear guard. Knows nothing about what is in it. |
 | `driver/bsp/` | Pin map, clock, flash geometry. The only place a pin number appears, and the only module with a per-chip port. |
 | `driver/usb_cdc/` | The CDC-ACM byte pipe on USB-OTG. Owns the TinyUSB stack. |
+| `driver/coredump/` | What the last panic left in the `coredump` partition: whether a dump is there and sound, its bytes, the panic reason as text, and the erase. The only module naming `esp_core_dump_*`. |
 | `workspace/0xF001/` | Build entry for product 0xF001: CMakeLists, sdkconfig.defaults, partitions.csv. |
 | `test/host/` | Unity runner, the host fakes for the SDK headers our logic includes, and the CMake that builds them. |
 | `.github/workflows/` | CI on every push, release on every `v*` tag. |

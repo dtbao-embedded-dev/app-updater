@@ -7,7 +7,7 @@ status: active
 updated: 2026-09-07
 source: test/host/CMakeLists.txt, test/host/runner.c, test/host/stub/esp_log.h, middleware/fw/test/test_fw.c, application/updater/test/test_updater.c, .github/workflows/ci.yml
 confidence: confirmed
-keywords: Unity, ctest, test/host, runner.c, UNITY_DIR, host_tests, esp_log stub, mutation, fake, stub, ota_fake, bsp_fake, nvs_fake, driver fake, 83 tests
+keywords: Unity, ctest, test/host, runner.c, UNITY_DIR, host_tests, esp_log stub, mutation, fake, stub, ota_fake, bsp_fake, nvs_fake, coredump_fake, driver fake, 83 tests
 ---
 
 # Testing
@@ -100,7 +100,7 @@ the last gate before a release tag, and it does not exist.
 
 | Directory | Holds | Contents today |
 |-----------|-------|----------------|
-| `fake/` | Host implementations of **our own** driver headers | `ota_fake.c`, `bsp_fake.c`, `nvs_fake.c` |
+| `fake/` | Host implementations of **our own** driver headers | `ota_fake.c`, `bsp_fake.c`, `nvs_fake.c`, `coredump_fake.c` |
 | `stub/` | Shadows of **vendor** headers, first on the include path | `esp_log.h`, `esp_rom_crc.h`, `esp_err.h`, `nvs.h`, `nvs_flash.h` |
 
 A test of middleware belongs in the first column. Before `driver/ota` and

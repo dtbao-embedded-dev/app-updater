@@ -7,7 +7,7 @@ status: active
 updated: 2026-09-07
 source: application/app/CMakeLists.txt, application/updater/CMakeLists.txt, middleware/*/CMakeLists.txt, driver/*/CMakeLists.txt
 confidence: confirmed
-keywords: REQUIRES, PRIV_REQUIRES, layering, dependency direction, callback, fw_err_t, bsp_err_t, usb_cdc_err_t, ota_err_t, storage_err_t, command_busy_cb_t, cfg_store_t, cfg_load_cb_t, cfg_save_cb_t, mapped driver, from_storage_err
+keywords: REQUIRES, PRIV_REQUIRES, layering, dependency direction, callback, fw_err_t, bsp_err_t, usb_cdc_err_t, ota_err_t, storage_err_t, coredump_err_t, command_busy_cb_t, cfg_store_t, cfg_load_cb_t, cfg_save_cb_t, mapped driver, from_storage_err
 ---
 
 # Layering and Dependencies
@@ -79,6 +79,7 @@ lives - `fw_crc32_le()`, which is why `esp_rom` left `protocol`, `cfg` and
 | Driver-local | `usb_cdc_err_t` | `driver/usb_cdc/` | Same reason. Mapped in `bring_up_usb()`, the one place that knows both. |
 | Driver-local | `ota_err_t` | `driver/ota/` | Same reason. Mapped where it is read: to `protocol_status_t` in `middleware/command`, and logged by name in `confirm_or_roll_back()`. |
 | Driver-local | `storage_err_t` | `driver/storage/` | Same reason. Mapped in `from_storage_err()` in `application/app/src/app.c`, which clamps anything outside the shared -1..-19 range to `FW_ERR_IO` rather than casting a code `fw_err_str()` cannot name. |
+| Driver-local | `coredump_err_t` | `driver/coredump/` | Same reason. Carries only `-1`, `-6` and `-7`: a damaged dump is not a failed call but an answer, reported through `coredump_state_t` instead, so there is no `_ERR_CORRUPT` to map. |
 | Wire | `protocol_status_t` | the USB channel | Not an internal code at all: these are bytes a PC parses, so they may never be renumbered. `middleware/command` returns them; nothing converts them to `fw_err_t` because they mean different things. |
 
 Every space shares the same meanings for the generic range `-1 .. -19`, so

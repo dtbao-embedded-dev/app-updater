@@ -115,6 +115,20 @@ below, and leaves a fresh empty `[Unreleased]` here.
   offsets from its release notes, or the factory image from the next tag.
 
 ### Added
+- **`driver/coredump`, the mapped core dump driver.** `esp_core_dump_*` now
+  lives in exactly one module. Four calls - `coredump_info_get`,
+  `coredump_read`, `coredump_erase`, `coredump_reason_get` - behind
+  `coredump_err_t`, so no `esp_err_t` reaches a header above the driver layer
+  (R-LAY-03) and the second layer-boundary grep learned the new prefix.
+  Unusually for this repo it has no `init`/`deinit` pair and no instance: there
+  is no hardware to claim, the partition is found by subtype on every call, and
+  that is what lets the boot-time panic report run before any module is up.
+  A damaged dump is reported through `coredump_state_t`
+  (`ABSENT` / `VALID` / `CORRUPT`) rather than as an error, and its bytes stay
+  readable - a dump nobody can checksum is exactly the one worth looking at.
+  With `CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH` off the component refuses with an
+  `#error` naming the option, because a stub that always answered "no dump"
+  would be a unit that silently never captures a panic.
 - **`driver/ota`, the mapped OTA driver.** `esp_ota_*` and `esp_partition_*`
   now live in exactly one module. Eleven functions - `ota_session_begin` /
   `_write` / `_end` / `_abort`, `ota_slot_size_get`, `ota_slot_version_get`,

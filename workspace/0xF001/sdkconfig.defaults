@@ -12,10 +12,23 @@ CONFIG_IDF_TARGET="esp32s3"
 # 16 MB flash. Change this and partitions.csv in the same commit.
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 
-# Two OTA slots, no factory partition, plus two small data partitions
-# (cfg_factory, cfg_setting) - see partitions.csv.
+# Two OTA slots, no factory partition, plus three small data partitions
+# (cfg_factory, cfg_setting, coredump) - see partitions.csv.
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Panic forensics kept on the device. Without this the panic handler prints a
+# backtrace to UART0 and nothing else, which is worth nothing on a unit in the
+# field with no cable attached. With it, espcoredump writes an ELF dump of the
+# registers, the panic reason and the task stacks into the 64 KB `coredump`
+# partition, where it survives the reboot and is read back later with
+# `idf.py coredump-info`.
+#
+# Everything else is left at ESP-IDF's own defaults on purpose - ELF format,
+# SHA256 checksum, and CONFIG_ESP_COREDUMP_CAPTURE_DRAM OFF. DRAM capture
+# needs at least 128 KB of partition and this one is 64 KB, so grow
+# partitions.csv before turning it on.
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
 
 # 240 MHz, the part's maximum, rather than the 160 MHz ESP-IDF defaults to.
 # An OTA fetch is TLS over Wi-Fi and the CPU is what pays for it; a download

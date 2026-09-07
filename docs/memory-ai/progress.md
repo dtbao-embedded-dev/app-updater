@@ -113,6 +113,19 @@ updated: 2026-09-07
   own `soc/` headers; `driver/bsp/CMakeLists.txt` selects the port by
   `IDF_TARGET` and refuses with an instruction when a target has none.
 
+- **A core dump partition, built and enabled.** 64 KB at `0xFF0000`, taken off
+  the tail of `app_firmware` so not one existing offset moved.
+  `CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y`; ELF format, SHA256 checksum,
+  `CONFIG_ESP_COREDUMP_CAPTURE_DRAM` off. **Verified by the build, not by
+  arithmetic alone:** ESP-IDF v6.1's `gen_esp32part.py` accepts the CSV with no
+  warning, the generated `partition_table/partition-table.bin` reads back with
+  `coredump,data,coredump,0xff0000,64K` and `app_firmware` as `14144K` ending
+  exactly at `0xFF0000`, and `libespcoredump.a` costs 9 792 bytes (8 267 flash
+  text, 617 flash data, 908 IRAM) with `CONFIG_ESP_COREDUMP_STACK_SIZE=0`, so
+  no dedicated DRAM stack. `app_updater.bin` is 0x3f620, 88% of its slot free.
+  The `build/sdkconfig` trap was walked, not assumed: the edit to
+  `sdkconfig.defaults` only took effect after `build/` was removed.
+
 ## What's left
 
 1. **Fill the BSP board table from the 0xF001 schematic.** Its GPIO numbers are
@@ -135,6 +148,10 @@ updated: 2026-09-07
    [rule/layer-boundaries.md](rule/layer-boundaries.md) is enforced at review,
    which means it is enforced when someone remembers. It is the only new rule
    in the repo with no automated gate.
+9b. **Get a core dump off a unit that is not on a bench.** The dump is written
+   and survives the reboot, but the only reader today is `idf.py coredump-info`
+   over a cable. A field unit needs `esp_core_dump_image_get()` behind a USB
+   command, or `esp_core_dump_get_summary()` reported as text — neither exists.
 9. Enable `gcc -fanalyzer` — deferred on purpose, not forgotten. The trigger is
    the first code that does buffer arithmetic, parsing, or allocation; see
    [rule/static-analysis.md](rule/static-analysis.md) for the exact list and the
@@ -155,6 +172,10 @@ updated: 2026-09-07
 - ⚠ The firmware has been **built** but never **flashed**. The partition table
   is accepted by the build and the image fits with 90% of its slot free; whether
   the layout boots on real hardware is still unknown.
+- ⚠ **No core dump has ever been written or read.** The partition and the
+  config are in place and the component is linked, but only a real panic on a
+  real board proves the write path, and only `idf.py coredump-info` against
+  that dump proves it is readable. Until then the feature is arithmetic too.
 - 🔴 `spec-verify` has never been run against this repo. It will at minimum flag
   the deviations in
   [rule/known-deviations.md](rule/known-deviations.md).

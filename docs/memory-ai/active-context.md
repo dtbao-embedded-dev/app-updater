@@ -56,6 +56,16 @@ The next session is still a bench session, in this order:
 
 ## Recent changes
 
+- 2026-09-07 — **The board can now say why it died.** A `coredump` partition,
+  64 KB at `0xFF0000`, plus `CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y`. The size
+  is Espressif's recommended 64 KB, which covers an ELF dump of the task stacks
+  but **not** `CONFIG_ESP_COREDUMP_CAPTURE_DRAM` (128 KB minimum) — that option
+  stays off. The space came off the tail of `app_firmware`
+  (`0xDE0000 → 0xDD0000`, 13.875 → 13.8125 MB) rather than from the two padding
+  gaps, which are 24 KB and 12 KB and not contiguous: every other offset in the
+  table, including both app slots, is byte-for-byte where it was. Reading a
+  dump back off a field unit is still missing — see `progress.md` item 9b.
+
 - 2026-09-07 — **The SDK left middleware, and a feature can be switched off.**
   Nine tasks on `release/v0.1`, each gated on a command rather than a reading:
 

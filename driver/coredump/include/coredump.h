@@ -101,13 +101,16 @@ coredump_err_t coredump_info_get(coredump_state_t *out_state, uint32_t *out_size
  * @param   out      buffer receiving `len` bytes
  * @param   len      how many bytes to read; must be non-zero
  * @return  COREDUMP_OK, COREDUMP_ERR_PARAM on a NULL `out`, a zero `len`, or a
- *          range reaching past the partition, COREDUMP_ERR_NOT_FOUND when no
- *          dump is stored, COREDUMP_ERR_IO when the read fails.
- * @note    The checksum is **not** checked here, so a corrupt dump reads back
- *          fine. Bounding a read to the dump's own length is the caller's job
- *          (this only refuses to leave the partition), because a caller that
- *          wants the trailing blank space is asking a legitimate question.
- *          Blocks on flash; not callable from an ISR.
+ *          range reaching past the **stored dump**, COREDUMP_ERR_NOT_FOUND
+ *          when no dump is stored, COREDUMP_ERR_IO when the read fails.
+ * @note    The checksum is **not** checked here, so a dump that fails it reads
+ *          back fine — forensics is exactly when the damaged bytes matter. The
+ *          bound is the stored length rather than the partition size, and the
+ *          length comes free with the probe that decides
+ *          `COREDUMP_ERR_NOT_FOUND`: that is what lets a caller read in chunks
+ *          without asking `coredump_info_get()` — and paying for a full-dump
+ *          checksum — once per chunk. Blocks on flash; not callable from an
+ *          ISR.
  */
 coredump_err_t coredump_read(uint32_t offset, void *out, uint32_t len);
 

@@ -118,9 +118,9 @@ coredump_err_t coredump_read(uint32_t offset, void *out, uint32_t len) {
         return COREDUMP_ERR_NOT_FOUND;
     }
 
-    /* The real driver bounds a read to the partition, not to the dump, so this
-     * one does too - the stored buffer stands in for the partition. */
-    if ((len > COREDUMP_FAKE_MAX) || (offset > (COREDUMP_FAKE_MAX - len))) {
+    /* The real driver bounds a read to the STORED length, not the partition
+     * size, so this one does too - past the dump there is only padding. */
+    if ((len > s_len) || (offset > (s_len - len))) {
         return COREDUMP_ERR_PARAM;
     }
 

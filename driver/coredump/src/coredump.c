@@ -111,20 +111,31 @@ coredump_err_t coredump_read(uint32_t offset, void *out, uint32_t len) {
         return COREDUMP_ERR_NOT_FOUND;
     }
 
-    /* Written as a subtraction so a caller passing a huge `offset` cannot make
-     * the sum wrap past the check (R-SRC-11). */
-    if ((len > part->size) || (offset > (part->size - len))) {
-        return COREDUMP_ERR_PARAM;
-    }
-
-    /* A blank partition reads back as 0xFF bytes, which look like data and are
-     * not - so refuse rather than hand a caller a file full of padding. An
-     * unreadable length field does NOT refuse: those bytes are still evidence. */
+    /* The bound is the STORED length, not the partition size: past the dump
+     * there is only 0xFF padding, which looks like data and is not. The number
+     * comes free with the probe that decides whether anything is stored at
+     * all, so bounding here costs a caller nothing and saves it from having to
+     * ask - which for a chunked read would otherwise mean one full-dump
+     * checksum per chunk. */
     size_t addr         = 0U;
     size_t size         = 0U;
     const esp_err_t got = esp_core_dump_image_get(&addr, &size);
     if (got == ESP_ERR_NOT_FOUND) {
         return COREDUMP_ERR_NOT_FOUND;
+    }
+    if (got != ESP_OK) {
+        /* A length field that is neither blank nor plausible: something wrote
+         * here but nothing says how much, so no read can be bounded. This is
+         * the one flavour of corruption whose bytes stay unreachable. */
+        ESP_LOGE(TAG, "image size: %s", esp_err_to_name(got));
+        return from_esp_err(got);
+    }
+
+    /* Written as a subtraction so a caller passing a huge `offset` cannot make
+     * the sum wrap past the check (R-SRC-11). */
+    const uint32_t stored = (uint32_t)size;
+    if ((len > stored) || (offset > (stored - len))) {
+        return COREDUMP_ERR_PARAM;
     }
 
     /* The SDK writes the dump from partition offset 0, so a dump offset and a

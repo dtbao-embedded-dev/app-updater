@@ -67,6 +67,8 @@ add_executable(host_tests
     "${REPO_ROOT}/middleware/command/src/command.c"
     "${REPO_ROOT}/middleware/command/src/command_upgrade.c"
     "${REPO_ROOT}/middleware/command/test/test_command.c"
+    "${REPO_ROOT}/middleware/cfg/src/cfg.c"
+    "${REPO_ROOT}/middleware/cfg/test/test_cfg.c"
     stub/esp_fake.c
     "${REPO_ROOT}/application/updater/src/updater.c"
     "${REPO_ROOT}/application/updater/test/test_updater.c")
@@ -76,6 +78,7 @@ target_include_directories(host_tests PRIVATE
     "${REPO_ROOT}/middleware/fw/include"
     "${REPO_ROOT}/middleware/protocol/include"
     "${REPO_ROOT}/middleware/command/include"
+    "${REPO_ROOT}/middleware/cfg/include"
     "${REPO_ROOT}/application/updater/include")
 
 target_link_libraries(host_tests PRIVATE unity)

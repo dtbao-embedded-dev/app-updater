@@ -65,6 +65,20 @@ void test_command_upgrade_begin_again_frees_the_first_session(void);
 void test_command_upgrade_refuses_while_the_update_cycle_is_writing(void);
 void test_command_upgrade_maps_a_flash_failure_to_hw(void);
 
+void test_cfg_defaults_are_what_an_erased_device_runs_on(void);
+void test_cfg_init_falls_back_to_defaults_when_nothing_was_stored(void);
+void test_cfg_init_falls_back_to_defaults_when_the_record_is_corrupt(void);
+void test_cfg_init_returns_an_adapter_failure_unchanged(void);
+void test_cfg_a_saved_value_survives_a_reload(void);
+void test_cfg_check_interval_refuses_the_scheduling_horizon(void);
+void test_cfg_check_interval_accepts_both_ends_of_its_range(void);
+void test_cfg_manifest_url_refuses_a_string_that_does_not_fit(void);
+void test_cfg_manifest_url_get_refuses_a_buffer_too_small(void);
+void test_cfg_every_accessor_is_err_state_before_init(void);
+void test_cfg_rejects_null_arguments(void);
+void test_cfg_deinit_is_repeatable_and_safe_half_built(void);
+void test_cfg_a_setter_never_writes_to_the_store(void);
+
 void test_updater_step_before_start_returns_err_state(void);
 void test_updater_init_twice_returns_err_state(void);
 void test_updater_rejects_null_arguments(void);
@@ -140,6 +154,20 @@ int main(void)
     RUN_TEST(test_command_upgrade_begin_again_frees_the_first_session);
     RUN_TEST(test_command_upgrade_refuses_while_the_update_cycle_is_writing);
     RUN_TEST(test_command_upgrade_maps_a_flash_failure_to_hw);
+
+    RUN_TEST(test_cfg_defaults_are_what_an_erased_device_runs_on);
+    RUN_TEST(test_cfg_init_falls_back_to_defaults_when_nothing_was_stored);
+    RUN_TEST(test_cfg_init_falls_back_to_defaults_when_the_record_is_corrupt);
+    RUN_TEST(test_cfg_init_returns_an_adapter_failure_unchanged);
+    RUN_TEST(test_cfg_a_saved_value_survives_a_reload);
+    RUN_TEST(test_cfg_check_interval_refuses_the_scheduling_horizon);
+    RUN_TEST(test_cfg_check_interval_accepts_both_ends_of_its_range);
+    RUN_TEST(test_cfg_manifest_url_refuses_a_string_that_does_not_fit);
+    RUN_TEST(test_cfg_manifest_url_get_refuses_a_buffer_too_small);
+    RUN_TEST(test_cfg_every_accessor_is_err_state_before_init);
+    RUN_TEST(test_cfg_rejects_null_arguments);
+    RUN_TEST(test_cfg_deinit_is_repeatable_and_safe_half_built);
+    RUN_TEST(test_cfg_a_setter_never_writes_to_the_store);
 
     RUN_TEST(test_updater_step_before_start_returns_err_state);
     RUN_TEST(test_updater_init_twice_returns_err_state);

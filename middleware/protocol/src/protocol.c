@@ -103,6 +103,17 @@ static const protocol_cmd_info_t s_cmd_map[] = {
     {PROTOCOL_CMD_UPG_BEGIN, PROTOCOL_UPG_BEGIN_LEN, PROTOCOL_CMD_SERVED},
     {PROTOCOL_CMD_UPG_WRITE, PROTOCOL_LEN_ANY, PROTOCOL_CMD_SERVED},
     {PROTOCOL_CMD_UPG_END, 0U, PROTOCOL_CMD_SERVED},
+
+    /* --- Core dump 0x07: read the panic record back off a running unit ---
+     * A range of its own rather than three numbers in Get System, because
+     * 0x0206 is retired and must stay absent. Note what is NOT here: no BEGIN
+     * and no END. A read has no session to open - every DUMP_READ carries its
+     * own offset and length, so a host may retry any chunk in any order and a
+     * transfer that dies half way costs nothing. Upgrade needs a session
+     * because it mutates a slot; this only looks. */
+    {PROTOCOL_CMD_DUMP_INFO, 0U, PROTOCOL_CMD_SERVED},
+    {PROTOCOL_CMD_DUMP_READ, PROTOCOL_DUMP_READ_LEN, PROTOCOL_CMD_SERVED},
+    {PROTOCOL_CMD_DUMP_ERASE, 0U, PROTOCOL_CMD_SERVED},
 };
 
 /* --------------------- Private function prototypes --------------------- */

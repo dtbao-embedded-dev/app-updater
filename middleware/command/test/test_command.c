@@ -87,13 +87,20 @@ void test_command_upgrade_maps_a_flash_failure_to_hw(void);
 /* -------------------------- Public functions --------------------------- */
 
 /* R2: the served set is a decision, not an accident. This is the list, and
- * anything drifting into or out of it fails here rather than on a bench. */
+ * anything drifting into or out of it fails here rather than on a bench.
+ *
+ * What it checks is the MAP, not the handlers: it asserts each opcode resolves
+ * `SERVED`, which a row alone satisfies. A row added without a `case` in
+ * `serve()` still passes here and answers -7 at runtime through the `default:`
+ * label - so this test guards the decision, and the per-opcode tests below
+ * guard that something actually answers. */
 void test_command_serves_exactly_the_documented_opcode_set(void) {
     static const uint32_t served[] = {
         PROTOCOL_CMD_RESTART_APP, PROTOCOL_CMD_PING,          PROTOCOL_CMD_SET_BOOT_SLOT,
         PROTOCOL_CMD_GET_VERSION, PROTOCOL_CMD_GET_BOOT_SLOT, PROTOCOL_CMD_GET_WIFI_MAC,
         PROTOCOL_CMD_GET_BLE_MAC, PROTOCOL_CMD_UPG_BEGIN,     PROTOCOL_CMD_UPG_WRITE,
-        PROTOCOL_CMD_UPG_END,
+        PROTOCOL_CMD_UPG_END,     PROTOCOL_CMD_DUMP_INFO,     PROTOCOL_CMD_DUMP_READ,
+        PROTOCOL_CMD_DUMP_ERASE,
     };
     uint32_t served_in_map = 0U;
 

@@ -33,6 +33,7 @@ void test_protocol_drops_a_frame_whose_crc_is_wrong(void);
 void test_protocol_covers_the_pad_bytes_in_the_crc(void);
 void test_protocol_never_resolves_the_all_zero_command(void);
 void test_protocol_cmd_lookup_separates_unsupported_from_unknown(void);
+void test_protocol_cmd_lookup_resolves_the_core_dump_range(void);
 void test_protocol_rsp_build_writes_status_first(void);
 void test_protocol_rsp_build_refuses_a_buffer_too_small(void);
 void test_protocol_status_str_names_every_defined_status(void);
@@ -138,6 +139,7 @@ int main(void)
     RUN_TEST(test_protocol_covers_the_pad_bytes_in_the_crc);
     RUN_TEST(test_protocol_never_resolves_the_all_zero_command);
     RUN_TEST(test_protocol_cmd_lookup_separates_unsupported_from_unknown);
+    RUN_TEST(test_protocol_cmd_lookup_resolves_the_core_dump_range);
     RUN_TEST(test_protocol_rsp_build_writes_status_first);
     RUN_TEST(test_protocol_rsp_build_refuses_a_buffer_too_small);
     RUN_TEST(test_protocol_status_str_names_every_defined_status);

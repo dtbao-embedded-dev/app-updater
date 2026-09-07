@@ -56,6 +56,7 @@ void test_protocol_drops_a_frame_whose_crc_is_wrong(void);
 void test_protocol_covers_the_pad_bytes_in_the_crc(void);
 void test_protocol_never_resolves_the_all_zero_command(void);
 void test_protocol_cmd_lookup_separates_unsupported_from_unknown(void);
+void test_protocol_cmd_lookup_resolves_the_core_dump_range(void);
 void test_protocol_rsp_build_writes_status_first(void);
 void test_protocol_rsp_build_refuses_a_buffer_too_small(void);
 void test_protocol_status_str_names_every_defined_status(void);
@@ -237,6 +238,37 @@ void test_protocol_cmd_lookup_separates_unsupported_from_unknown(void) {
     TEST_ASSERT_NULL(protocol_cmd_lookup(0x0206U)); /* retired PRODUCT_ID */
     TEST_ASSERT_NULL(protocol_cmd_lookup(0x0207U)); /* never assigned */
     TEST_ASSERT_NULL(protocol_cmd_lookup(0x0700U)); /* no such range */
+}
+
+/* The widths are the point, not just the presence: pinning DUMP_INFO and
+ * DUMP_ERASE at 0 and DUMP_READ at 8 is what lets the dispatcher reject a wrong
+ * length with -3 before any handler looks at a value, so a DUMP_READ handler
+ * may index req->data with no length guard of its own. A row that drifted to
+ * PROTOCOL_LEN_ANY would move that guard into the handler silently. */
+void test_protocol_cmd_lookup_resolves_the_core_dump_range(void) {
+    const protocol_cmd_info_t *info = protocol_cmd_lookup(PROTOCOL_CMD_DUMP_INFO);
+    TEST_ASSERT_NOT_NULL(info);
+    TEST_ASSERT_EQUAL_INT(PROTOCOL_CMD_SERVED, info->kind);
+    TEST_ASSERT_EQUAL_UINT32(0U, info->req_len);
+
+    info = protocol_cmd_lookup(PROTOCOL_CMD_DUMP_READ);
+    TEST_ASSERT_NOT_NULL(info);
+    TEST_ASSERT_EQUAL_INT(PROTOCOL_CMD_SERVED, info->kind);
+    TEST_ASSERT_EQUAL_UINT32(PROTOCOL_DUMP_READ_LEN, info->req_len);
+
+    info = protocol_cmd_lookup(PROTOCOL_CMD_DUMP_ERASE);
+    TEST_ASSERT_NOT_NULL(info);
+    TEST_ASSERT_EQUAL_INT(PROTOCOL_CMD_SERVED, info->kind);
+    TEST_ASSERT_EQUAL_UINT32(0U, info->req_len);
+
+    /* Item 0 stays meaningless in the new range too, and the range does not
+     * quietly extend past what the spec assigns. */
+    TEST_ASSERT_NULL(protocol_cmd_lookup(0x0700U));
+    TEST_ASSERT_NULL(protocol_cmd_lookup(0x0704U));
+
+    /* And the retired Get System number stays absent, which is the whole
+     * reason these three went into a range of their own. */
+    TEST_ASSERT_NULL(protocol_cmd_lookup(0x0206U));
 }
 
 void test_protocol_rsp_build_writes_status_first(void) {

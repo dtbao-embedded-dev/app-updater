@@ -59,12 +59,21 @@ extern "C" {
 #define PROTOCOL_UPG_CHUNK_CAP  32768U
 #define PROTOCOL_UPG_CHUNK_STEP 1024U
 
+/* Largest DUMP_READ a host may ask for, one flash sector. Deliberately NOT the
+ * upgrade chunk band: an image is megabytes and worth big frames, a core dump
+ * is at most 64 KB and read once in a unit's life, so the 16 round-trips cost
+ * nothing while a 32 KB answer would cost 32 KB of permanent .bss in the
+ * dispatcher - see COMMAND_DUMP_CHUNK_MAX. */
+#define PROTOCOL_DUMP_CHUNK_MAX 4096U
+
 /** Fixed payload widths the spec pins. */
 #define PROTOCOL_MAC_LEN           6U
 #define PROTOCOL_VERSION_FIELD_LEN 16U
 #define PROTOCOL_VERSION_LEN       32U
 #define PROTOCOL_UPG_BEGIN_LEN     13U
 #define PROTOCOL_UPG_OFFSET_LEN    4U
+#define PROTOCOL_DUMP_READ_LEN     8U
+#define PROTOCOL_DUMP_INFO_RSP_LEN 8U
 
 /** `req_len` of a command whose own handler decides what a legal length is. */
 #define PROTOCOL_LEN_ANY UINT32_MAX
@@ -82,6 +91,19 @@ extern "C" {
 #define PROTOCOL_CMD_UPG_BEGIN     0x0601U
 #define PROTOCOL_CMD_UPG_WRITE     0x0602U
 #define PROTOCOL_CMD_UPG_END       0x0603U
+#define PROTOCOL_CMD_DUMP_INFO     0x0701U
+#define PROTOCOL_CMD_DUMP_READ     0x0702U
+#define PROTOCOL_CMD_DUMP_ERASE    0x0703U
+
+/* Core dump gets its own range rather than three numbers in Get System, and
+ * that is not a style choice: 0x0206 is a RETIRED opcode this map deliberately
+ * resolves as absent, so reusing it would make an old tool asking for
+ * PRODUCT_ID reach the dump reader instead of being told the command is gone. */
+
+/** `state` byte of a DUMP_INFO response; the values `coredump_state_t` uses. */
+#define PROTOCOL_DUMP_ABSENT  0U
+#define PROTOCOL_DUMP_VALID   1U
+#define PROTOCOL_DUMP_CORRUPT 2U
 
 /** Boot slot encoding, shared by Set/Get BOOT_SLOT and UPG_BEGIN's `target`. */
 #define PROTOCOL_SLOT_UPDATER  0U

@@ -14,12 +14,7 @@
 
 #include "command_priv.h"
 
-#include "esp_err.h"
 #include "esp_log.h"
-#include "esp_mac.h"
-#include "esp_system.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 
 #include <string.h>
 
@@ -40,7 +35,7 @@ static protocol_status_t handle_restart_app(command_t *cmd);
 static protocol_status_t handle_set_boot_slot(const protocol_req_t *req);
 static protocol_status_t handle_get_version(uint8_t *payload, uint32_t *payload_len);
 static protocol_status_t handle_get_boot_slot(uint8_t *payload, uint32_t *payload_len);
-static protocol_status_t handle_get_mac(esp_mac_type_t type, uint8_t *payload,
+static protocol_status_t handle_get_mac(bsp_mac_kind_t kind, uint8_t *payload,
                                         uint32_t *payload_len);
 static fw_err_t reply(command_t *cmd, uint32_t command, protocol_status_t status,
                       const uint8_t *payload, uint32_t payload_len);
@@ -148,10 +143,10 @@ static protocol_status_t serve(command_t *cmd, const protocol_req_t *req, uint8_
             return handle_get_boot_slot(payload, payload_len);
 
         case PROTOCOL_CMD_GET_WIFI_MAC:
-            return handle_get_mac(ESP_MAC_WIFI_STA, payload, payload_len);
+            return handle_get_mac(BSP_MAC_WIFI, payload, payload_len);
 
         case PROTOCOL_CMD_GET_BLE_MAC:
-            return handle_get_mac(ESP_MAC_BT, payload, payload_len);
+            return handle_get_mac(BSP_MAC_BLE, payload, payload_len);
 
         case PROTOCOL_CMD_UPG_BEGIN:
             return command_upgrade_begin(cmd, req);
@@ -178,8 +173,7 @@ static protocol_status_t handle_restart_app(command_t *cmd) {
 
     ESP_LOGI(TAG, "restart requested over usb, resetting in %ums",
              (unsigned)COMMAND_RESTART_GRACE_MS);
-    vTaskDelay(pdMS_TO_TICKS(COMMAND_RESTART_GRACE_MS));
-    esp_restart();
+    bsp_restart(COMMAND_RESTART_GRACE_MS);
 
     /* Never reached on target. On the host the fake counts the reset and
      * returns, and the caller must not send a second reply - which is what the
@@ -246,11 +240,11 @@ static protocol_status_t handle_get_boot_slot(uint8_t *payload, uint32_t *payloa
 /* Both MACs come from eFuse, so they answer with no radio brought up and no
  * BLE stack linked in - which is why this product serves them while every ATE
  * hardware check answers -7. */
-static protocol_status_t handle_get_mac(esp_mac_type_t type, uint8_t *payload,
+static protocol_status_t handle_get_mac(bsp_mac_kind_t kind, uint8_t *payload,
                                         uint32_t *payload_len) {
-    const esp_err_t err = esp_read_mac(payload, type);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "read mac type=%d failed: esp_err=0x%x", (int)type, (unsigned)err);
+    const bsp_err_t err = bsp_mac_get(kind, payload);
+    if (err != BSP_OK) {
+        ESP_LOGW(TAG, "read mac kind=%d: %s", (int)kind, bsp_err_str(err));
         return PROTOCOL_ERR_HW;
     }
 

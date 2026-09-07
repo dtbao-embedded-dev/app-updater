@@ -17,6 +17,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "bsp.h"
 #include "fw.h"
 #include "ota.h"
 #include "protocol.h"

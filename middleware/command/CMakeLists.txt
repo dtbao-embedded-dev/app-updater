@@ -1,9 +1,10 @@
-# `ota` is in REQUIRES, not PRIV_REQUIRES: command.h holds an ota_session_t,
-# so the driver header is part of this module's public interface.
+# `bsp` and `ota` are in REQUIRES, not PRIV_REQUIRES: command.h holds an
+# ota_session_t and the dispatcher's handler prototypes take a bsp_mac_kind_t,
+# so both driver headers are part of this module's own interface.
 idf_component_register(SRCS "src/command.c"
                             "src/command_upgrade.c"
                        INCLUDE_DIRS "include"
-                       REQUIRES fw ota protocol
-                       PRIV_REQUIRES esp_hw_support esp_system esp_rom freertos)
+                       REQUIRES bsp fw ota protocol
+                       PRIV_REQUIRES esp_rom)
 
 house_warnings(${COMPONENT_LIB})

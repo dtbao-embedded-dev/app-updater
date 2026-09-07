@@ -48,7 +48,7 @@ distinction is carried by `coredump_state_t`, never by an error code.
 |----------|---------|-------|
 | `const char *coredump_err_str(coredump_err_t)` | a string literal, never NULL | Reentrant; unknown value yields `"COREDUMP_ERR_UNKNOWN"`. |
 | `coredump_err_t coredump_info_get(coredump_state_t *out_state, uint32_t *out_size)` | `OK`, `ERR_PARAM` on NULL, `ERR_IO` when the partition is unreachable | `OK` **includes an absent dump** — that is an answer, so a caller needs no second call to tell absence from failure. `*out_size` is the stored length with checksum included, `0` when absent. |
-| `coredump_err_t coredump_read(uint32_t offset, void *out, uint32_t len)` | `OK`, `ERR_PARAM` on NULL / zero `len` / a range past the partition, `ERR_NOT_FOUND` when nothing is stored, `ERR_IO` on a failed read | Does **not** verify the checksum, so a corrupt dump reads back fine. Bounds only to the partition; bounding to the dump's own length is the caller's job. |
+| `coredump_err_t coredump_read(uint32_t offset, void *out, uint32_t len)` | `OK`, `ERR_PARAM` on NULL / zero `len` / a range past the **stored dump**, `ERR_NOT_FOUND` when nothing is stored, `ERR_IO` on a failed read | Does **not** verify the checksum, so a dump that fails it reads back fine. Bounds to the stored length, and that length comes free with the probe deciding `ERR_NOT_FOUND` — which is what lets a chunked read skip `coredump_info_get()` per chunk. |
 | `coredump_err_t coredump_erase(void)` | `OK`, `ERR_NOT_FOUND` when the table has no coredump row, `ERR_IO` on failure | `OK` **including when there was nothing to erase**, which is what makes a host's read-then-erase safe to retry after a lost reply. |
 | `coredump_err_t coredump_reason_get(char *out, size_t cap)` | `OK`, `ERR_PARAM` on NULL / zero `cap`, `ERR_NOT_FOUND` when nothing is stored or the dump carries no reason, `ERR_IO` on a failed read | Already-readable text — nothing needs symbolising to log it. `out[0]` is set to `'\0'` before anything else, so a failed call never leaves stale bytes. |
 
@@ -65,8 +65,15 @@ actually there. A caller reading a dump in chunks must therefore call
 `info_get` per chunk.
 
 `coredump_read()` costs one `esp_partition_read` plus the 4-byte length probe
-that decides `ERR_NOT_FOUND`. `coredump_erase()` erases every sector of the
-partition, so it costs a full 64 KB erase.
+that decides `ERR_NOT_FOUND` — and that probe is also what bounds the read, so a
+caller reading in chunks never has to ask the size itself. `coredump_erase()`
+erases every sector of the partition, so it costs a full 64 KB erase.
+
+There is one flavour of corruption whose bytes stay unreachable: a length field
+that is neither blank nor plausible. `coredump_info_get()` reports it as
+`COREDUMP_CORRUPT` with size `0`, and `coredump_read()` refuses, because nothing
+says how much of the partition was written and so no read can be bounded. A
+dump with a good length field and a bad checksum reads back normally.
 
 ## Build dependency, and the refusal
 

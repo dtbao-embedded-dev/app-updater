@@ -115,6 +115,20 @@ below, and leaves a fresh empty `[Unreleased]` here.
   offsets from its release notes, or the factory image from the next tag.
 
 ### Added
+- **The three core dump handlers, and the buffer they answer out of.**
+  `middleware/command/src/command_dump.c` serves `DUMP_INFO` / `DUMP_READ` /
+  `DUMP_ERASE` through `driver/coredump`. `DUMP_READ` could not use the
+  dispatcher's payload buffer at all - `PAYLOAD_MAX` is 32 bytes on the stack of
+  a task with a 4096-byte stack - so it stages its answer in a new 4096-byte
+  `command_t.chunk` and points the existing `echo` route at it, the same
+  mechanism PING uses for the request's own bytes. `.bss` is now 75 504 bytes,
+  22.09 % of DRAM, and the buffer is 4096 of it. Ten new host tests, and they
+  were **proved to have teeth by mutation**: reading from offset 0 instead of
+  the requested offset left two of the three content assertions green, because
+  the first fill pattern repeated with period 256 and every offset under test
+  was a multiple of 256 - the pattern now folds in the high byte of the index
+  and the same mutation turns all three red. The host suite went from 84 tests
+  to 94.
 - **A core dump range on the USB command protocol, `0x07`.** `DUMP_INFO`
   `0x0701` (no payload, answers `[state:1][rsv:3][size:4]`), `DUMP_READ`
   `0x0702` (`[offset:4][len:4]`, `len` at most `PROTOCOL_DUMP_CHUNK_MAX` 4096)

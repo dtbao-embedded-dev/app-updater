@@ -5,9 +5,9 @@ order: 6
 purpose: The order the dispatcher decides things in, and what each served handler does.
 status: active
 updated: 2026-09-07
-source: middleware/command/src/command.c, middleware/command/include/command.h, middleware/command/test/test_command.c
+source: middleware/command/src/command.c, middleware/command/src/command_dump.c, middleware/command/src/command_priv.h, middleware/command/include/command.h, middleware/command/test/test_command.c
 confidence: confirmed
-keywords: command_on_frame, command_init, command_deinit, serve, handle_restart_app, handle_set_boot_slot, handle_get_version, handle_get_boot_slot, handle_get_mac, command_reply_cb_t, command_busy_cb_t, COMMAND_RESTART_GRACE_MS
+keywords: command_on_frame, command_init, command_deinit, serve, handle_restart_app, handle_set_boot_slot, handle_get_version, handle_get_boot_slot, handle_get_mac, command_dump_info, command_dump_read, command_dump_erase, PAYLOAD_MAX, echo, PROTOCOL_DUMP_CHUNK_MAX, command_reply_cb_t, command_busy_cb_t, COMMAND_RESTART_GRACE_MS
 ---
 
 # USB Command Dispatch
@@ -57,14 +57,16 @@ layer above it (R-LAY-01). The same pattern `ota_http` uses to report progress
 upward without knowing who it notifies.
 
 `command_t` carries the response frame buffer — the second of the channel's two
-`PROTOCOL_MAX_FRAME` buffers — and the upgrade session. A response body is built
-straight into that frame rather than into a third buffer.
+`PROTOCOL_MAX_FRAME` buffers — the upgrade session, and one 4096-byte staging
+buffer for `DUMP_READ`. A response body is built straight into the frame rather
+than into a third buffer; the staging buffer exists for the one answer too big
+to pass through the small payload buffer at all (see below).
 
 ## Dispatch
 
-One **flat switch** over the ten served opcodes, not the two-level
-range-then-item switch the source spec describes. At ten cases the extra level
-is ceremony: the compiler builds the same jump table either way, and a reader
+One **flat switch** over the thirteen served opcodes, not the two-level
+range-then-item switch the source spec describes. At thirteen cases the extra
+level is ceremony: the compiler builds the same jump table either way, and a reader
 looking up `0x0202` finds it in one place. The `default:` label logs and answers
 `-7`, and is unreachable — the map already said the opcode is served, so
 reaching it means a row was added without a case.
@@ -80,6 +82,9 @@ reaching it means a row was added without a case.
 | `0x0202` Get BOOT_SLOT | Maps the running partition's subtype to the wire encoding. Neither OTA slot is `-6`, which no `partitions.csv` in this repo can produce |
 | `0x0203`/`0x0204` | `bsp_mac_get()` for `BSP_MAC_WIFI` / `BSP_MAC_BLE`; a failure is `-6` |
 | `0x0601`/`0x0602`/`0x0603` | Routed to [usb-upgrade-session.md](usb-upgrade-session.md) |
+| `0x0701` DUMP_INFO | `coredump_info_get()` into `[state:1][rsv:3][size:4]`. An **absent** dump is `state 0` with status `0` — an answer, not a failure, the same doctrine as an unset version above. A driver failure is `-6` |
+| `0x0702` DUMP_READ | `coredump_read(offset, cmd->chunk, len)`, then points `echo` at `cmd->chunk`. `len` of zero or over `PROTOCOL_DUMP_CHUNK_MAX` is `-4`, a range past the stored dump is `-4`, no dump at all is `-5`, flash refusing is `-6`. A dump failing its checksum **still reads** |
+| `0x0703` DUMP_ERASE | `coredump_erase()`. Succeeds even with nothing to erase, so a host's read-then-erase is safe to retry after a lost reply; `-6` on failure |
 
 **Set and Get BOOT_SLOT are asymmetric on purpose.** Set writes `otadata` for
 the next boot; Get reports what is running now. A Set followed by a Get reads
@@ -88,6 +93,33 @@ restart" rather than read it back.
 
 `command_deinit()` aborts an open transfer rather than finalising it: a slot
 half written is a slot nothing should boot.
+
+## The one answer too big for the payload buffer
+
+`PAYLOAD_MAX` is 32 bytes — `PROTOCOL_VERSION_LEN`, the widest reply any of the
+small handlers produces — and it is a **stack** array in `command_on_frame()`,
+inside a task whose stack is 4096 (`APP_USB_TASK_STACK`). So a 4 KB `DUMP_READ`
+answer cannot go through it, and enlarging it would overflow the task stack
+rather than fix anything.
+
+The route that already existed is `echo`: a handler sets `*echo` to bytes it
+does not own, and `reply()` copies once from there straight into `cmd->frame`.
+PING points it at the parser's own buffer. That buffer is only valid until the
+next `protocol_parser_feed()`, so `DUMP_READ` cannot borrow it — it needs a home
+that outlives `serve()`, which is why `command_t` carries `chunk`.
+
+**That is also why the read chunk is a flash sector and not the upgrade band.**
+`PROTOCOL_DUMP_CHUNK_MAX` at 4096 costs 4096 bytes of `.bss` for a 64 KB dump
+read once in a unit's life; the 32768 of `PROTOCOL_UPG_CHUNK_CAP` would cost
+eight times that to save fourteen round-trips. Measured: `.bss` is 75 504 bytes,
+22.09 % of DRAM, and the buffer is 4096 of it.
+
+**The tests were proved to have teeth by mutation, not assumed.** Reading from
+offset 0 instead of the requested offset left two of the three content
+assertions green, because the first fill pattern repeated with period 256 and
+every offset under test was a multiple of 256. The pattern now folds in the
+high byte of the index, and the same mutation turns all three red.
+
 
 ## The RESTART_APP ordering, and how it is proven
 

@@ -63,8 +63,8 @@
 #define APP_USB_RX_BYTES 4096U
 
 /* The dispatch task. It parses frames and runs handlers, the deepest of which
- * writes flash through esp_ota_write(); the frame buffers it works on live in
- * the context below rather than on this stack. Priority matches the TinyUSB
+ * writes flash through ota_session_write(); the frame buffers it works on live
+ * in the context below rather than on this stack. Priority matches the TinyUSB
  * service task, so neither starves the other. */
 #define APP_USB_TASK_STACK 4096U
 #define APP_USB_TASK_PRIO  5U

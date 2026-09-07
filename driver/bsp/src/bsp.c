@@ -10,6 +10,8 @@
 
 #include "bsp.h"
 
+#include "bsp_priv.h"
+
 #include "driver/gpio.h"
 #include "esp_err.h"
 #include "esp_flash.h"
@@ -89,11 +91,14 @@ bsp_err_t bsp_init(bsp_t *dev, const bsp_cfg_t *cfg) {
     }
 
     /* Said once, in the log, because it is the first question a bench asks and
-     * the answer is not obvious from the cables: two USB peripherals share one
-     * PHY on this chip and the log is not on the USB one. A technician reading
-     * this line knows which cable carries what before probing anything. */
-    ESP_LOGI(TAG, "usb-otg on gpio%d/%d (d+/d-), console on uart0 gpio%d/%d (tx/rx)",
-             BSP_USB_DP_GPIO, BSP_USB_DM_GPIO, BSP_CONSOLE_UART_TX_GPIO, BSP_CONSOLE_UART_RX_GPIO);
+     * the answer is not obvious from the cables: which cable carries the log
+     * and which carries the command channel. The numbers come from the port,
+     * so this line reads correctly on whatever chip the port was written for;
+     * why the console is not on USB is the port's story to tell. */
+    const bsp_port_pins_t pins = bsp_port_pins_get();
+    ESP_LOGI(TAG, "usb-otg on gpio%ld/%ld (d+/d-), console on uart0 gpio%ld/%ld (tx/rx)",
+             (long)pins.usb_dp_gpio, (long)pins.usb_dm_gpio, (long)pins.console_tx_gpio,
+             (long)pins.console_rx_gpio);
 
     if (dev->board.led_status_gpio != BSP_GPIO_NONE) {
         const gpio_config_t io = {

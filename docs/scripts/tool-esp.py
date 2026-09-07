@@ -600,9 +600,9 @@ def main() -> int:
                              f"{', '.join(PORT_COMMANDS)}, or no command")
     parser.add_argument("-w", "--workspace", metavar="NAME",
                         help="product workspace under workspace/, e.g. 0xF001. "
-                             "Defaults to WORKSPACE in .env.esp, or to the only "
-                             "workspace in the repo. Not for: format, test, "
-                             "analyse")
+                             "Required: falls back to WORKSPACE in .env.esp and "
+                             "to nothing else, not even when the repo holds one "
+                             "workspace. Not for: format, test, analyse")
     parser.add_argument("--address",
                         help="erase-flash only: start of the region to erase, "
                              "e.g. 0x19000. Erases the whole chip when omitted")

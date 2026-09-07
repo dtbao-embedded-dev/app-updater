@@ -188,6 +188,19 @@ _Generated 2026-09-07 - 36 durable doc(s)._
   runtime is lost on reset. `storage_blob_save()` now has host tests either
   way, including the wear guard, so the persistence half is no longer unproven
   — only uncalled.
+- ⚠ **cppcheck is not version-pinned, and the versions differ.** CI runs
+  **2.13.0** (apt, in `espressif/idf:v6.1`); a developer machine here has
+  **2.20.0**. They do not report the same findings, so `analyse` can be clean
+  locally and red in CI or the other way round. `ci.yml` prints
+  `cppcheck --version` for exactly this reason - check it before believing a
+  local result. `clang-format` and `clang-tidy` are pinned; cppcheck publishes
+  no wheel and no official Linux binary, and an apt pin breaks when the
+  container base moves.
+- ⚠ **`analyse` reports cppcheck findings as `style:`, not `error:`.** Its real
+  signal is the **exit code**: `python docs/scripts/tool-esp.py analyse; echo $?`.
+  Grepping the output for `error:` reports a clean run on a tree with findings -
+  which is how three of them reached CI on 2026-09-07 while a local check said
+  clean.
 - ⚠ **The factory image name has no time of day.** Two builds on the same day
   produce the same `bl_..._Sep0726.bin` and the second overwrites the first
   without a word. Deliberate, marked with a `ponytail:` comment in

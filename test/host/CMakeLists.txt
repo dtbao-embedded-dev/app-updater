@@ -72,7 +72,10 @@ add_executable(host_tests
     "${REPO_ROOT}/middleware/cfg/src/cfg.c"
     "${REPO_ROOT}/middleware/cfg/test/test_cfg.c"
     fake/bsp_fake.c
+    fake/nvs_fake.c
     fake/ota_fake.c
+    "${REPO_ROOT}/driver/storage/src/storage.c"
+    "${REPO_ROOT}/driver/storage/test/test_storage.c"
     "${REPO_ROOT}/application/updater/src/updater.c"
     "${REPO_ROOT}/application/updater/test/test_updater.c")
 
@@ -81,6 +84,7 @@ target_include_directories(host_tests PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}/fake"
     "${REPO_ROOT}/driver/bsp/include"
     "${REPO_ROOT}/driver/ota/include"
+    "${REPO_ROOT}/driver/storage/include"
     "${REPO_ROOT}/middleware/fw/include"
     "${REPO_ROOT}/middleware/protocol/include"
     "${REPO_ROOT}/middleware/command/include"

@@ -82,6 +82,18 @@ void test_cfg_rejects_null_arguments(void);
 void test_cfg_deinit_is_repeatable_and_safe_half_built(void);
 void test_cfg_a_setter_never_writes_to_the_store(void);
 
+void test_storage_err_str_names_every_defined_code(void);
+void test_storage_load_reports_not_found_before_anything_is_written(void);
+void test_storage_saves_and_reads_the_same_bytes_back(void);
+void test_storage_save_of_identical_bytes_writes_nothing(void);
+void test_storage_save_of_changed_bytes_writes_once(void);
+void test_storage_reports_a_stored_blob_that_does_not_fit_as_damaged(void);
+void test_storage_refuses_a_blob_past_its_ceiling(void);
+void test_storage_erases_an_unusable_partition_once_and_carries_on(void);
+void test_storage_every_operation_is_err_state_before_init(void);
+void test_storage_rejects_null_arguments(void);
+void test_storage_deinit_is_repeatable_and_safe_half_built(void);
+
 void test_updater_step_before_start_returns_err_state(void);
 void test_updater_init_twice_returns_err_state(void);
 void test_updater_rejects_null_arguments(void);
@@ -174,6 +186,18 @@ int main(void)
     RUN_TEST(test_cfg_rejects_null_arguments);
     RUN_TEST(test_cfg_deinit_is_repeatable_and_safe_half_built);
     RUN_TEST(test_cfg_a_setter_never_writes_to_the_store);
+
+    RUN_TEST(test_storage_err_str_names_every_defined_code);
+    RUN_TEST(test_storage_load_reports_not_found_before_anything_is_written);
+    RUN_TEST(test_storage_saves_and_reads_the_same_bytes_back);
+    RUN_TEST(test_storage_save_of_identical_bytes_writes_nothing);
+    RUN_TEST(test_storage_save_of_changed_bytes_writes_once);
+    RUN_TEST(test_storage_reports_a_stored_blob_that_does_not_fit_as_damaged);
+    RUN_TEST(test_storage_refuses_a_blob_past_its_ceiling);
+    RUN_TEST(test_storage_erases_an_unusable_partition_once_and_carries_on);
+    RUN_TEST(test_storage_every_operation_is_err_state_before_init);
+    RUN_TEST(test_storage_rejects_null_arguments);
+    RUN_TEST(test_storage_deinit_is_repeatable_and_safe_half_built);
 
     RUN_TEST(test_updater_step_before_start_returns_err_state);
     RUN_TEST(test_updater_init_twice_returns_err_state);

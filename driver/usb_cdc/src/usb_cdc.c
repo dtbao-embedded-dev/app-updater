@@ -236,7 +236,14 @@ bool usb_cdc_is_mounted(const usb_cdc_t *dev) {
 /* Arguments are checked at the public boundary (R-SRC-06); helpers assume it. */
 
 /* Runs on the TinyUSB task. Only a flag is touched, so nothing here can stall
- * the channel. */
+ * the channel.
+ *
+ * R-SAN-02, why the suppression below: `event` is indeed only read, but this
+ * function's address is handed to TINYUSB_DEFAULT_CONFIG() above, so its
+ * signature is the SDK's to choose. Adding const here would need a cast on the
+ * function pointer - trading a real cast for a style warning. cppcheck says as
+ * much in the finding itself. */
+/* cppcheck-suppress constParameterCallback */
 static void on_usb_event(tinyusb_event_t *event, void *arg) {
     usb_cdc_t *dev = (usb_cdc_t *)arg;
 

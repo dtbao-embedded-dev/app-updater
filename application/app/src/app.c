@@ -449,7 +449,13 @@ static fw_err_t on_usb_reply(void *ctx, const uint8_t *data, size_t len) {
 /* What UPG_BEGIN has to know before it erases a slot: whether the scheduled
  * HTTP update is already writing the same one. Asked through a callback
  * because the dispatcher lives below this layer and may not include
- * updater.h. */
+ * updater.h.
+ *
+ * R-SAN-02, why the suppression below: `ctx` is only read, but the signature
+ * is `command_busy_cb_t`'s, not this function's to change - and widening that
+ * typedef to `const void *` for a style warning would ripple into
+ * middleware/command and its host fake. */
+/* cppcheck-suppress constParameterCallback */
 static bool is_slot_write_busy(void *ctx) {
 #if FW_FEATURE_UPDATER
     const app_ctx_t *app  = (const app_ctx_t *)ctx;

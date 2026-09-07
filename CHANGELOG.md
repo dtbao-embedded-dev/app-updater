@@ -115,6 +115,19 @@ below, and leaves a fresh empty `[Unreleased]` here.
   offsets from its release notes, or the factory image from the next tag.
 
 ### Added
+- **A core dump range on the USB command protocol, `0x07`.** `DUMP_INFO`
+  `0x0701` (no payload, answers `[state:1][rsv:3][size:4]`), `DUMP_READ`
+  `0x0702` (`[offset:4][len:4]`, `len` at most `PROTOCOL_DUMP_CHUNK_MAX` 4096)
+  and `DUMP_ERASE` `0x0703`. The served set went from ten opcodes to thirteen.
+  **No BEGIN and no END:** a read has no session to open, so a host may retry
+  any chunk in any order and a transfer that dies half way costs nothing -
+  upgrade needs a session because it mutates a slot, this only looks. A range
+  of its own rather than three numbers in Get System because `0x0206` is a
+  retired opcode the map deliberately resolves as absent, and reusing it would
+  make an old tool asking for PRODUCT_ID reach the dump reader. The 4096 cap is
+  not the upgrade chunk band: a dump is at most 64 KB and read once in a unit's
+  life, so 16 round-trips cost nothing while a 32 KB answer would cost 32 KB of
+  permanent `.bss` in the dispatcher.
 - **`driver/coredump`, the mapped core dump driver.** `esp_core_dump_*` now
   lives in exactly one module. Four calls - `coredump_info_get`,
   `coredump_read`, `coredump_erase`, `coredump_reason_get` - behind

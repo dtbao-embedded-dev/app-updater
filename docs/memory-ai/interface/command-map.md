@@ -2,17 +2,17 @@
 title: USB Command Map
 category: interface
 order: 10
-purpose: Every opcode the protocol defines, which ten this build serves, and why each of the rest answers -7.
+purpose: Every opcode the protocol defines, which thirteen this build serves, and why each of the rest answers -7.
 status: active
 updated: 2026-09-07
 source: middleware/protocol/src/protocol.c, middleware/protocol/include/protocol.h, middleware/command/src/command.c
 confidence: confirmed
-keywords: command map, opcode, PROTOCOL_CMD_SERVED, PROTOCOL_CMD_UNSUPPORTED, PROTOCOL_ERR_BAD_CMD, PROTOCOL_ERR_UNSUPPORTED, RESTART_APP, PING, BOOT_SLOT, VERSION, WIFI_MAC, BLE_MAC, UPG_BEGIN, UPG_WRITE, UPG_END, retired item
+keywords: command map, opcode, PROTOCOL_CMD_SERVED, PROTOCOL_CMD_UNSUPPORTED, PROTOCOL_ERR_BAD_CMD, PROTOCOL_ERR_UNSUPPORTED, RESTART_APP, PING, BOOT_SLOT, VERSION, WIFI_MAC, BLE_MAC, UPG_BEGIN, UPG_WRITE, UPG_END, DUMP_INFO, DUMP_READ, DUMP_ERASE, retired item
 ---
 
 # USB Command Map
 
-> 46 opcodes are defined; **ten** are served. The other 36 exist in the table
+> 49 opcodes are defined; **thirteen** are served. The other 36 exist in the table
 > only so they can answer `-7` instead of `-2`.
 
 ## Why the unserved rows exist
@@ -38,7 +38,7 @@ A **retired** item stays absent on purpose. Get System `0x06` was `PRODUCT_ID`
 and is gone; a tool built against the old map gets `-2` and learns the command
 disappeared, rather than reaching whatever number took its place.
 
-## Served (ten)
+## Served (thirteen)
 
 | COMMAND | Name | REQ.DATA | RSP payload after STATUS |
 |---------|------|----------|--------------------------|
@@ -52,6 +52,9 @@ disappeared, rather than reaching whatever number took its place.
 | `0x0601` | UPG_BEGIN | `[target:1][img_size:4][img_crc32:4][chunk_max:4]` | — |
 | `0x0602` | UPG_WRITE | `[offset:4][chunk]` | — |
 | `0x0603` | UPG_END | — | — verifies and finalises; arms nothing |
+| `0x0701` | DUMP_INFO | — | `[state:1][rsv:3][size:4]` — `state` 0 absent, 1 valid, 2 corrupt |
+| `0x0702` | DUMP_READ | `[offset:4][len:4]`, `len` ≤ 4096 | `len` raw bytes of the stored dump |
+| `0x0703` | DUMP_ERASE | — | — succeeds even with nothing to erase |
 
 `slot` and `target` share one encoding: `0` = `app_updater` (ota_0), `1` =
 `app_firmware` (ota_1). Two encodings for one pair of slots is a bug waiting to
@@ -59,6 +62,29 @@ happen.
 
 Both MACs come from eFuse, which is why they are served with no radio brought up
 and no BLE stack linked — and why every ATE hardware check is not.
+
+## Core dump `0x07`, and what is deliberately missing from it
+
+The range holds **no BEGIN and no END**. A read has no session to open: every
+`DUMP_READ` carries its own `offset` and `len`, so a host may retry any chunk in
+any order and a transfer that dies half way costs nothing. Upgrade needs a
+session because it mutates a slot; this only looks.
+
+Why a new range instead of three numbers in Get System: `0x0206` is a
+**retired** opcode the map deliberately resolves as absent, so reusing it would
+make an old tool asking for PRODUCT_ID reach the dump reader instead of being
+told the command is gone.
+
+`len` is capped at `PROTOCOL_DUMP_CHUNK_MAX` (4096, one flash sector) and
+**not** at the upgrade chunk band. An image is megabytes and worth big frames; a
+dump is at most 64 KB and read once in a unit's life, so 16 round-trips cost
+nothing while a 32 KB answer would cost 32 KB of permanent `.bss` in the
+dispatcher.
+
+An absent dump is reported through `DUMP_INFO`'s `state` byte with status `0`,
+not as a failure — the same doctrine as an unset version in `VERSION`. A
+**corrupt** dump still reads: forensics is exactly when the damaged bytes
+matter. Only a read with no dump at all is refused, with `-5`.
 
 ## Unsupported, by range, with the reason
 
@@ -82,8 +108,14 @@ always told which half of its request to fix.
 ## Keeping this honest
 
 `middleware/command/test/test_command.c` walks the whole 16-bit opcode space and
-asserts that **exactly** the ten opcodes above report `PROTOCOL_CMD_SERVED`. An
-opcode drifting into or out of the set fails there rather than on a bench.
+asserts that **exactly** the thirteen opcodes above report
+`PROTOCOL_CMD_SERVED`. An opcode drifting into or out of the set fails there
+rather than on a bench.
+
+What that test does **not** check is that a handler exists: a map row alone
+satisfies it, and a row added without a `case` in `serve()` still passes there
+and answers `-7` at runtime through the `default:` label. The per-opcode tests
+in the same file are what prove something actually answers.
 
 ## See also
 

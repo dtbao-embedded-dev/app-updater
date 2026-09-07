@@ -13,7 +13,7 @@
 #include "command.h"
 #include "protocol.h"
 
-#include "esp_fake.h"
+#include "bsp_fake.h"
 #include "esp_rom_crc.h"
 #include "ota_fake.h"
 
@@ -238,10 +238,10 @@ void test_command_restart_app_replies_before_it_resets(void) {
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
     TEST_ASSERT_EQUAL_UINT32(1U, s_reply_count);
     TEST_ASSERT_EQUAL_UINT32(0U, s_restarts_when_replied);
-    TEST_ASSERT_EQUAL_UINT32(1U, esp_fake_restart_count());
+    TEST_ASSERT_EQUAL_UINT32(1U, bsp_fake_restart_count());
 
     /* And the reply was given time to leave before the reset. */
-    TEST_ASSERT_TRUE(esp_fake_delay_total_ms() >= COMMAND_RESTART_GRACE_MS);
+    TEST_ASSERT_TRUE(bsp_fake_grace_total_ms() >= COMMAND_RESTART_GRACE_MS);
 }
 
 /* [0:16] is the image running now - on this product the updater, which the
@@ -331,8 +331,8 @@ void test_command_reads_both_burned_in_macs(void) {
     static const uint8_t bt[]   = {0x11U, 0x22U, 0x33U, 0x44U, 0x55U, 0x67U};
 
     setup();
-    esp_fake_set_mac(ESP_MAC_WIFI_STA, wifi);
-    esp_fake_set_mac(ESP_MAC_BT, bt);
+    bsp_fake_set_mac(BSP_MAC_WIFI, wifi);
+    bsp_fake_set_mac(BSP_MAC_BLE, bt);
 
     TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_GET_WIFI_MAC, NULL, 0U));
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_OK, reply_status());
@@ -345,7 +345,7 @@ void test_command_reads_both_burned_in_macs(void) {
 
 void test_command_maps_a_mac_read_failure_to_hw(void) {
     setup();
-    esp_fake_fail_read_mac(ESP_FAIL);
+    bsp_fake_fail_mac_get(BSP_ERR_IO);
 
     TEST_ASSERT_EQUAL_INT(FW_OK, send(PROTOCOL_CMD_GET_WIFI_MAC, NULL, 0U));
     TEST_ASSERT_EQUAL_INT32(PROTOCOL_ERR_HW, reply_status());
@@ -552,7 +552,7 @@ void test_command_upgrade_transfers_a_whole_image(void) {
     /* UPG_END finalises and arms NOTHING - the host follows with Set BOOT_SLOT
      * and RESTART_APP, which is what keeps a half-written slot unbootable. */
     TEST_ASSERT_EQUAL_INT(-1, ota_fake_boot_slot_armed());
-    TEST_ASSERT_EQUAL_UINT32(0U, esp_fake_restart_count());
+    TEST_ASSERT_EQUAL_UINT32(0U, bsp_fake_restart_count());
 }
 
 /* The right number of bytes arrived and they are the wrong bytes. The slot
@@ -696,7 +696,7 @@ static fw_err_t capture_reply(void *ctx, const uint8_t *data, size_t len) {
     memcpy(s_reply, data, len);
     s_reply_len = (uint32_t)len;
     s_reply_count += 1U;
-    s_restarts_when_replied = esp_fake_restart_count();
+    s_restarts_when_replied = bsp_fake_restart_count();
     return FW_OK;
 }
 
@@ -713,7 +713,7 @@ static void setup(void) {
         .busy_ctx  = NULL,
     };
 
-    esp_fake_reset();
+    bsp_fake_reset();
     ota_fake_reset();
     memset(&s_cmd, 0, sizeof(s_cmd));
     memset(s_reply, 0, sizeof(s_reply));

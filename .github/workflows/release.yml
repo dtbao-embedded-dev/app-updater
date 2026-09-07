@@ -33,16 +33,18 @@ jobs:
             exit 1
           fi
 
-      # Through tool-esp.py, like CI: the workspace path and the factory image
-      # name live in the script, and `merge` takes that name from VERSION - which
-      # the gate above has already proved equals the tag.
+      # Through tool-esp.py, like CI: the `-C` into the workspace and the
+      # factory image name live in the script, and `merge` takes that name from
+      # VERSION - which the gate above has already proved equals the tag. `-w`
+      # names the product because nothing is inferred and a runner has no
+      # .env.esp; it must stay in step with the paths the next step copies from.
       - name: Build
         shell: bash
         run: |
           . "$IDF_PATH/export.sh"
-          python docs/scripts/tool-esp.py build
-          python docs/scripts/tool-esp.py size | tee size-report.txt
-          python docs/scripts/tool-esp.py merge
+          python docs/scripts/tool-esp.py -w 0xF001 build
+          python docs/scripts/tool-esp.py -w 0xF001 size | tee size-report.txt
+          python docs/scripts/tool-esp.py -w 0xF001 merge
 
       - name: Collect the artifacts a field unit needs
         shell: bash

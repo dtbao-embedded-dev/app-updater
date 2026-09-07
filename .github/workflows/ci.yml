@@ -4,9 +4,13 @@ name: CI
 # then the host suite under ASan/UBSan, plus a secret scan over the whole tree.
 #
 # Every step runs through docs/scripts/tool-esp.py rather than idf.py or cmake
-# directly. The workspace path, the fused `size size-components` and the
-# sanitizer flags then exist once. A second copy here is one that drifts while
-# CI stays green - building a real project, just not the one that changed.
+# directly. The `-C` into the workspace, the fused `size size-components` and
+# the sanitizer flags then exist once. A second copy here is one that drifts
+# while CI stays green - building a real project, just not the one that changed.
+#
+# The product is named with `-w` on every build step: the script infers no
+# default, and a runner has no .env.esp to read one from. It is also the only
+# place this workflow says which product it builds, so it says it out loud.
 on:
   push:
     branches: [main, developing, "release/**"]
@@ -118,7 +122,7 @@ jobs:
         shell: bash
         run: |
           . "$IDF_PATH/export.sh"
-          python docs/scripts/tool-esp.py build
+          python docs/scripts/tool-esp.py -w 0xF001 build
       # R-BLD-04: the number nobody looks at is the number that runs out. The
       # script fuses `size size-components`, so the per-component breakdown
       # cannot be lost by someone typing the short form here.
@@ -126,7 +130,7 @@ jobs:
         shell: bash
         run: |
           . "$IDF_PATH/export.sh"
-          python docs/scripts/tool-esp.py size
+          python docs/scripts/tool-esp.py -w 0xF001 size
 
   secrets:
     name: secret scan

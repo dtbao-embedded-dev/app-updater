@@ -49,6 +49,11 @@ UPG_CHUNK_MIN = 4096
 UPG_CHUNK_MAX = 32768
 UPG_CHUNK_STEP = 1024
 
+# The read chunk is a flash sector, not the upgrade band: a dump is at most
+# 64 KB and read once in a unit's life, so 16 round-trips cost nothing while a
+# 32 KB answer would cost 32 KB of permanent .bss in the dispatcher.
+DUMP_CHUNK_MAX = 4096
+
 CMD_RESTART_APP = 0x0001
 CMD_PING = 0x0006
 CMD_SET_BOOT_SLOT = 0x0101
@@ -57,6 +62,9 @@ CMD_GET_BOOT_SLOT = 0x0202
 CMD_UPG_BEGIN = 0x0601
 CMD_UPG_WRITE = 0x0602
 CMD_UPG_END = 0x0603
+CMD_DUMP_INFO = 0x0701
+CMD_DUMP_READ = 0x0702
+CMD_DUMP_ERASE = 0x0703
 
 SLOT_UPDATER = 0
 SLOT_FIRMWARE = 1
@@ -64,6 +72,16 @@ SLOT_NAMES = {SLOT_UPDATER: "app_updater", SLOT_FIRMWARE: "app_firmware"}
 
 VERSION_BLOCK_LEN = 32
 VERSION_FIELD_LEN = 16
+
+DUMP_INFO_LEN = 8
+DUMP_STATE_ABSENT = 0
+DUMP_STATE_VALID = 1
+DUMP_STATE_CORRUPT = 2
+DUMP_STATE_NAMES = {
+    DUMP_STATE_ABSENT: "absent",
+    DUMP_STATE_VALID: "valid",
+    DUMP_STATE_CORRUPT: "CORRUPT (stored, but its checksum does not match)",
+}
 
 STATUS_NAMES = {
     0: "OK",
@@ -243,6 +261,24 @@ def read_image(path: Path, chunk: int) -> bytes:
     return image
 
 
+def dump_target(path: Path) -> Path:
+    """Where the dump will be written, judged before the port opens.
+
+    Only the directory is checked, and nothing is created: the file is written
+    once, at the end, from a complete transfer. A half-written crash.bin that
+    `esp-coredump` then refuses is worse than no file at all, and creating it
+    up front would also destroy a previous dump before knowing there is a new
+    one to replace it with.
+    """
+    parent = path.parent if str(path.parent) else Path(".")
+    if not parent.is_dir():
+        sys.exit(f"\n{parent} is not a directory, so {path.name} cannot be "
+                 f"written there.\n")
+    if path.is_dir():
+        sys.exit(f"\n{path} is a directory; give a file name.\n")
+    return path
+
+
 # ------------------------------------------------------- commands ---
 
 def cmd_selftest() -> int:
@@ -354,9 +390,69 @@ def cmd_upgrade(chan: Channel, name: str, image: bytes, target: int, chunk: int,
     return 0
 
 
+def cmd_dump(chan: Channel, path: Path, keep: bool) -> int:
+    """Pulls the stored core dump to a file, then clears it on the device."""
+    info = chan.expect_ok(CMD_DUMP_INFO)
+    if len(info) < DUMP_INFO_LEN:
+        sys.exit(f"\nDUMP_INFO answered {len(info)} bytes, expected "
+                 f"{DUMP_INFO_LEN}.\n")
+
+    state = info[0]
+    size = struct.unpack("<I", info[4:8])[0]
+    name = DUMP_STATE_NAMES.get(state, f"unknown state {state}")
+
+    if state == DUMP_STATE_ABSENT:
+        # Not an error on the device's part - nothing has panicked. Still a
+        # non-zero exit, because `dump crash.bin && esp-coredump ... crash.bin`
+        # must not run the second half against a file that was never written.
+        print("no core dump stored - nothing to fetch")
+        return 1
+
+    print(f"core dump: {name}, {size} bytes")
+    if state == DUMP_STATE_CORRUPT:
+        # Fetched anyway, and deliberately: a dump that fails its checksum is
+        # exactly the one worth looking at. esp-coredump may still read part
+        # of it, and even a partial backtrace beats none.
+        print("  WARNING: the checksum does not match. Fetching it regardless "
+              "- some of it may still decode.")
+
+    got = bytearray()
+    while len(got) < size:
+        want = min(DUMP_CHUNK_MAX, size - len(got))
+        piece = chan.expect_ok(CMD_DUMP_READ, struct.pack("<II", len(got), want))
+        if len(piece) != want:
+            sys.exit(f"\nasked {want} bytes at {len(got)}, got {len(piece)}.\n")
+        got += piece
+        print(f"\r  {len(got)}/{size} bytes ({100 * len(got) // size}%)",
+              end="", flush=True)
+    print()
+
+    # Written only now, from a complete transfer, and before the erase: the
+    # device keeps the only copy until the file exists on disk.
+    try:
+        path.write_bytes(bytes(got))
+    except OSError as exc:
+        sys.exit(f"\ncannot write {path}: {exc}\n"
+                 f"The dump is still on the device; run this again.\n")
+    print(f"wrote {path} ({len(got)} bytes)")
+
+    if keep:
+        # CONFIG_ESP_COREDUMP_FLASH_NO_OVERWRITE is on, so this is not a
+        # harmless choice and the tool says so rather than leaving it implied.
+        print("--keep: the dump is still on the device, so the NEXT panic "
+              "will NOT be captured until it is erased")
+    else:
+        chan.expect_ok(CMD_DUMP_ERASE)
+        print("dump erased on the device; the next panic has room")
+
+    print(f"\nto read it:  esp-coredump info_corefile --core-format raw "
+          f"-c {path} <the .elf of the build that crashed>")
+    return 0
+
+
 # ------------------------------------------------------------ main ---
 
-PORT_COMMANDS = ("ping", "version", "boot-slot", "restart", "upgrade")
+PORT_COMMANDS = ("ping", "version", "boot-slot", "restart", "upgrade", "dump")
 
 
 def main() -> int:
@@ -365,7 +461,8 @@ def main() -> int:
         epilog="protocol.h is the authority on every opcode and constant.")
     parser.add_argument("command", choices=("selftest", *PORT_COMMANDS))
     parser.add_argument("argument", nargs="?",
-                        help="upgrade: the image file. boot-slot: 0 or 1")
+                        help="upgrade: the image file. boot-slot: 0 or 1. "
+                             "dump: the file to write")
     parser.add_argument("-p", "--port", help="serial port, e.g. COM7. Omit to detect")
     parser.add_argument("--bytes", type=int, default=64,
                         help="ping only: payload size, default 64")
@@ -376,6 +473,9 @@ def main() -> int:
                              f"multiple of {UPG_CHUNK_STEP}")
     parser.add_argument("--arm", action="store_true",
                         help="upgrade only: also set the boot slot and restart")
+    parser.add_argument("--keep", action="store_true",
+                        help="dump only: leave the dump on the device. It then "
+                             "captures no further panic until erased")
     parser.add_argument("--timeout", type=float, default=5.0,
                         help="seconds to wait for one response, default 5")
     args = parser.parse_args()
@@ -388,6 +488,8 @@ def main() -> int:
         sys.exit("\n--arm and --chunk are for `upgrade` only.\n")
     if args.command != "ping" and args.bytes != 64:
         sys.exit("\n--bytes is for `ping` only.\n")
+    if args.command != "dump" and args.keep:
+        sys.exit("\n--keep is for `dump` only.\n")
 
     if args.command == "selftest":
         return cmd_selftest()
@@ -396,12 +498,17 @@ def main() -> int:
         sys.exit("\nupgrade needs an image file.\n")
     if args.command == "boot-slot" and args.argument not in ("0", "1"):
         sys.exit("\nboot-slot needs 0 (app_updater) or 1 (app_firmware).\n")
+    if args.command == "dump" and not args.argument:
+        sys.exit("\ndump needs a file to write, e.g. crash.bin\n")
 
     # Judged before the port is opened, so a bad --chunk or a missing file
     # never costs a board connection.
     image = b""
     if args.command == "upgrade":
         image = read_image(Path(args.argument), args.chunk)
+    dump_path = Path()
+    if args.command == "dump":
+        dump_path = dump_target(Path(args.argument))
 
     chan = Channel(args.port or find_port(), args.timeout)
     try:
@@ -413,6 +520,8 @@ def main() -> int:
             return cmd_boot_slot(chan, int(args.argument))
         if args.command == "restart":
             return cmd_restart(chan)
+        if args.command == "dump":
+            return cmd_dump(chan, dump_path, args.keep)
         return cmd_upgrade(chan, Path(args.argument).name, image, args.target,
                            args.chunk, args.arm)
     finally:

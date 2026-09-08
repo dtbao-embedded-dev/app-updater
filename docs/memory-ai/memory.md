@@ -88,7 +88,7 @@ _Generated 2026-09-08 - 38 durable doc(s)._
   `ota_http`'s HTTP client, and no `esp_ota_*` / `esp_partition_*` / `nvs_*` /
   `esp_restart` / `esp_read_mac` / `esp_rom` anywhere in `middleware/` or
   `application/` outside two lines of deliberate comment prose. `driver/` holds
-  four modules now: `bsp`, `ota`, `storage`, `usb_cdc`.
+  five modules now: `bsp`, `coredump`, `ota`, `storage`, `usb_cdc`.
 - **83 host tests, green**, up from 69, built under the firmware's own
   `-Werror` warning set. Eleven of the new ones are the blob store's first
   tests ever. **Three assertions were proved to have teeth by mutation**, not
@@ -183,8 +183,8 @@ _Generated 2026-09-08 - 38 durable doc(s)._
 9b. **Archive `app_firmware`'s `.elf` when that repo ships.** The read-out path
    exists now, but a dump is only decodable against the exact build that
    crashed, and a crash there is the likely one — it is the product and it runs
-   almost all the time. `release.yml` here archives `app_updater.elf` and the
-   bootloader's pair, and its `SHA256SUMS` doubles as the dump-to-release index
+   almost all the time. `release.yml` here archives `app_updater.elf`
+   and its `.map`, and its `SHA256SUMS` doubles as the dump-to-release index
    because `app_elf_sha256` **is** `sha256(app_updater.elf)`. The sibling repo
    is empty and its first release has to do the same, or a dump fetched from
    the field is bytes with nothing to decode them against.
@@ -921,7 +921,7 @@ second product actually disagrees.
 - [../interface/tool-esp-cli.md](../interface/tool-esp-cli.md) — the wrapper that runs this build
 
 ### [architecture] CI and Release Pipeline
-*`architecture/ci-pipeline.md` - What GitHub Actions runs on a push and on a tag, in which container, and which gates can stop a release. - status: inferred - source: .github/workflows/ci.yml, .github/workflows/release.yml, docs/scripts/tool-release.py - keywords: GitHub Actions, ci.yml, release.yml, espressif/idf:v6.1, ctest, clang-format, clang-tidy, cppcheck, gitleaks, ASan, UBSan, gh release create, SHA256SUMS, bootloader.elf, app_elf_sha256, dump-to-release index*
+*`architecture/ci-pipeline.md` - What GitHub Actions runs on a push and on a tag, in which container, and which gates can stop a release. - status: inferred - source: .github/workflows/ci.yml, .github/workflows/release.yml, docs/scripts/tool-release.py - keywords: GitHub Actions, ci.yml, release.yml, espressif/idf:v6.1, ctest, clang-format, clang-tidy, cppcheck, gitleaks, ASan, UBSan, gh release create, SHA256SUMS, app_elf_sha256, dump-to-release index*
 
 # CI and Release Pipeline
 
@@ -1028,7 +1028,7 @@ toolchain and the plain runner has the `gh` CLI.
      |-------|-------|-----|
      | Provision a blank board | `bl_<project>_<pid>_<MonDDYY>.bin` (copied by glob, and the job fails unless exactly one matches), `bootloader.bin`, `partition-table.bin`, `ota_data_initial.bin`, `flash_args` | A bench. The factory image is one `esptool` write at `0x0`; the pieces are there for a partial reflash. |
      | Update a board | `app_updater.bin` | The OTA payload the updater downloads |
-     | Diagnose one already in the field | `app_updater.elf`, `app_updater.map`, `bootloader.elf`, `bootloader.map`, `sdkconfig`, `size-report.txt` | The `.elf` is the only thing that turns a panic backtrace into line numbers, and it must be the exact one that built the `.bin`. **Which one that is, is answerable from the release alone:** ESP-IDF embeds `sha256(app_updater.elf)` in the image as `app_elf_sha256`, the same number a core dump carries and the panic handler prints, so `SHA256SUMS` doubles as the dump-to-release index. The bootloader's pair is there because `espcoredump` is app-side only — a fault before the app starts leaves no dump at all, just an address on UART0 |
+     | Diagnose one already in the field | `app_updater.elf`, `app_updater.map`, `sdkconfig`, `size-report.txt` | The `.elf` is the only thing that turns a panic backtrace into line numbers, and it must be the exact one that built the `.bin`. **Which one that is, is answerable from the release alone:** ESP-IDF embeds `sha256(app_updater.elf)` in the image as `app_elf_sha256`, the same number a core dump carries and the panic handler prints, so `SHA256SUMS` doubles as the dump-to-release index. |
 
      Plus `SHA256SUMS` over all of them.
    - **Gate:** every `.bin` named in `flash_args` must exist in `dist/`, and
@@ -3961,8 +3961,9 @@ The dump carries `app_elf_sha256` so the tool can tell you — and you can tell
 without the tool, because that field **is** `sha256(app_updater.elf)`. So the
 `SHA256SUMS` a release publishes doubles as the dump-to-release index: grep it
 for the hash the crash reported and the matching release is the one that
-answers. `release.yml` archives `app_updater.elf` with its `.map`, the
-bootloader's pair, `sdkconfig` and the size report for exactly this.
+answers. `release.yml` archives `app_updater.elf` with its `.map`, `sdkconfig`
+and the size report for exactly this — and has done since the first workflow
+commit, so the one green release run actually shipped them.
 
 🔴 **Gap: `app_firmware` has no such archive yet.** The sibling repo is empty,
 and a crash there is the likely one — it is the product and it runs almost all

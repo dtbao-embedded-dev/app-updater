@@ -13,6 +13,7 @@
 #include "app_priv.h"
 #include "bsp.h"
 #include "cfg.h"
+#include "coredump.h"
 #include "fw_config.h"
 #include "ota.h"
 #include "storage.h"
@@ -108,6 +109,7 @@ static fw_err_t cfg_store_load(void *ctx, void *out, size_t cap, size_t *out_len
 static fw_err_t cfg_store_save(void *ctx, const void *data, size_t len);
 static fw_err_t from_storage_err(storage_err_t err);
 static void confirm_or_roll_back(void);
+static void report_last_panic(void);
 
 #if FW_FEATURE_UPDATER
 static fw_err_t bring_up_updater(app_ctx_t *ctx);
@@ -131,6 +133,11 @@ fw_err_t app_run(void) {
     /* R-VER-08: decide the fate of a freshly flashed image before doing
      * anything that could make the decision impossible. */
     confirm_or_roll_back();
+
+    /* Then say why the last boot ended, while the log is still the boot log a
+     * person reads top-down. Needs no module up: driver/coredump has no
+     * lifecycle, it finds the partition by subtype on every call. */
+    report_last_panic();
 
     memset(&s_ctx, 0, sizeof(s_ctx));
 
@@ -350,6 +357,41 @@ static void confirm_or_roll_back(void) {
     if (err != OTA_OK) {
         ESP_LOGE(TAG, "confirm image: %s", ota_err_str(err));
     }
+}
+
+/* The one thing a field unit can say about its own last death without a host
+ * tool attached. The panic handler wrote the dump before `panic_restart()`, so
+ * by the time this runs the record is already in flash and the reason is
+ * already text - nothing here has to symbolise anything.
+ *
+ * Silent on a clean boot. A line saying "no core dump" every time would train
+ * a reader to skip the one boot where it matters.
+ *
+ * This does NOT erase what it read: the dump stays for `DUMP_READ` to fetch,
+ * and with CONFIG_ESP_COREDUMP_FLASH_NO_OVERWRITE on, erasing here would throw
+ * away the first crash of a boot loop - which is the one that explains it. */
+static void report_last_panic(void) {
+    coredump_state_t state = COREDUMP_ABSENT;
+    uint32_t size          = 0U;
+
+    if (coredump_info_get(&state, &size) != COREDUMP_OK) {
+        /* Not worth a warning: a unit whose coredump partition cannot be read
+         * has a table problem, and the boot that follows will show it. */
+        return;
+    }
+    if (state == COREDUMP_ABSENT) {
+        return;
+    }
+
+    char reason[COREDUMP_REASON_MAX];
+    const coredump_err_t err = coredump_reason_get(reason, sizeof(reason));
+
+    /* A dump with no readable reason is still worth announcing: it tells a
+     * reader to go fetch the bytes, which is more than silence does. */
+    ESP_LOGW(TAG, "last boot ended in a panic: %s",
+             (err == COREDUMP_OK) ? reason : "reason unavailable");
+    ESP_LOGW(TAG, "core dump %s, %u bytes - read it with tool-usb.py dump",
+             (state == COREDUMP_VALID) ? "valid" : "CORRUPT", (unsigned)size);
 }
 
 #if FW_FEATURE_UPDATER

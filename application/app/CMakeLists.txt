@@ -8,6 +8,7 @@ idf_component_register(SRCS "src/app.c"
                        PRIV_REQUIRES bsp
                                      cfg
                                      command
+                                     coredump
                                      ota
                                      protocol
                                      storage

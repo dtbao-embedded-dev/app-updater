@@ -4,7 +4,7 @@ category: rule
 order: 7
 purpose: Every place this repo departs from the house standard on purpose, plus the unfinished work that must not ship.
 status: active
-updated: 2026-09-07
+updated: 2026-09-08
 source: application/app/src/app.c:176-193, application/updater/src/updater.c:200-215, driver/storage/src/storage.c, driver/bsp/src/bsp.c:22-33, CHANGELOG.md, conversation
 confidence: confirmed
 keywords: SPEC-DEVIATION, TODO, R-VER-08, R-RPO-06, R-RPO-01, R-LAY-01, R-LAY-04, gap, self-test, migration, usb, console UART0, PROTOCOL_ERR_UNSUPPORTED, PING ceiling, esp_log exception, esp_http_client exception, mapped driver
@@ -12,7 +12,7 @@ keywords: SPEC-DEVIATION, TODO, R-VER-08, R-RPO-06, R-RPO-01, R-LAY-01, R-LAY-04
 
 # Known Deviations and Open Holes
 
-> Eleven deliberate departures and six unfinished holes; the holes are the list that must be empty before a field release.
+> Twelve deliberate departures and six unfinished holes; the holes are the list that must be empty before a field release.
 
 ## When this applies
 
@@ -34,6 +34,8 @@ this repo does not match the standard.
 | 9 | source USB spec | `PING` refuses a payload above **32768** bytes with `-3`, not the `PROTOCOL_MAX_DATA` (32772) the spec implies | The spec contradicts itself: it says PING echoes up to `PROTOCOL_MAX_DATA` bytes **and** that the reply carries `4 + REQ.LENGTH`, which at the cap asks for a frame past that same cap. Refusing the length beats truncating the echo. `UPG_WRITE` is unaffected - its reply is a status only, which is exactly why the cap is 32772. |
 | 10 | own rule, `R-LAY-01` read strictly | `middleware/ota_http` keeps `esp_http_client` and `esp-tls` in `PRIV_REQUIRES` - the one middleware component with an SDK dependency | **Exception 2** to [layer-boundaries.md](layer-boundaries.md). HTTP is a protocol stack, which the house layer table assigns to middleware; `driver/` is for "one device or peripheral role" and an HTTP client is not a device. Wrapping it would put a non-device in the driver layer to satisfy the letter of a rule whose purpose - the portability line at the driver/BSP seam (R-LAY-04) - it does not serve, since `esp_http_client` is portable across every ESP part this repo will build for. The vendor status still stops at the module boundary: `ota_http.c` has its own `from_esp_err()` and `ota_http_t` holds its handle as `void *`. |
 | 11 | `R-LAY-01` table | This repo forbids what the standard's own table permits: middleware may **not** call "HAL primitives" directly, only mapped drivers | Stricter than the standard, not looser, so `spec-verify` will not flag it - but it is a departure and belongs here. The looser reading is what produced the defect: `command_upgrade_begin()` called `esp_ota_begin()`, which nailed the USB upgrade path to one vendor and left its tests impersonating ESP-IDF. Written up with both greps in [layer-boundaries.md](layer-boundaries.md). |
+
+| 12 | own rule, `versioning-and-release.md` step 2 | The partition table changed and this ships as **PATCH `0.1.1`**, not MAJOR | User decision, and the release line explains it: the branch is `release/v0.1`, so 0.1.x is its own series and 1.0.0 would come from a `release/v1.0`. The cost is real and does not care about the numbering scheme: a PATCH number tells an installer this is a safe drop-in, while an OTA image built against 0.1.0's table does not fit the new one. Stated as the **first** bullet of that release's `Known limitations` rather than left to the number. Revisit when the first version that has booted on hardware is cut. |
 
 ## Open holes (must be empty before a field release)
 

@@ -84,12 +84,36 @@ jobs:
           # Diagnosing a unit that is already in the field. The .elf is the only
           # thing that can turn a panic backtrace back into line numbers, and it
           # must be the exact one that produced the .bin.
+          #
+          # Which .elf that is, is answerable from the release alone: ESP-IDF
+          # embeds sha256(app_updater.elf) in the image as `app_elf_sha256`, and
+          # that is the same number the panic handler prints as "ELF file
+          # SHA256:" and the same number a core dump carries. So SHA256SUMS
+          # below doubles as the dump-to-release index - grep it for the hash
+          # from the crash and the matching release is the one that answers.
           cp "$build/app_updater.elf" dist/
           cp "$build/app_updater.map" dist/
 
+          # The bootloader gets the same treatment, and it is NOT symmetry for
+          # its own sake: `espcoredump` is app-side only (BOOTLOADER_BUILD
+          # excludes it), so a fault before the app starts leaves NO core dump
+          # at all - just an address on UART0. bootloader.elf is then the only
+          # thing that can resolve it, and it is the failure that matters most,
+          # because a unit that dies here never reaches the USB command channel
+          # that would let anyone ask it anything.
+          cp "$build/bootloader/bootloader.elf" dist/
+          cp "$build/bootloader/bootloader.map" dist/
+
           # What this image was built from: the resolved config and the budget.
-          cp workspace/0xF001/sdkconfig dist/
-          cp size-report.txt            dist/
+          #
+          # From build/, NOT from the workspace: workspace/0xF001/CMakeLists.txt
+          # sets SDKCONFIG to ${CMAKE_BINARY_DIR}/sdkconfig on purpose, so that
+          # a generated config cannot outlive a clean and go on building against
+          # an edit to sdkconfig.defaults that never took effect. There is no
+          # sdkconfig in the workspace to copy, and with `set -eu` above this
+          # step aborts the whole release if it tries.
+          cp "$build/sdkconfig" dist/
+          cp size-report.txt    dist/
 
           # The OTA path checks the image it downloaded; publishing the digest
           # is what lets anyone else check it too.

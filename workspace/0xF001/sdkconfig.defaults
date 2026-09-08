@@ -1,14 +1,55 @@
 # R-BLD-05: every build knob is versioned here, never in a developer
 # environment. A build that only works on one laptop is not a build.
+#
+# ESP-IDF reads this file ONLY when the generated sdkconfig does not exist.
+# CMakeLists.txt puts that file inside build/ for exactly this reason, so
+# deleting the build directory is enough to make an edit here take effect.
+# Left in the source tree it would outlive every clean and go on building a
+# 16 MB partition table against a bootloader header that still said 4 MB.
 
 CONFIG_IDF_TARGET="esp32s3"
 
-# 4 MB flash. Change this and partitions.csv in the same commit.
-CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+# 16 MB flash. Change this and partitions.csv in the same commit.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 
-# Two OTA slots, no factory partition - see partitions.csv.
+# Two OTA slots, no factory partition, plus three small data partitions
+# (cfg_factory, cfg_setting, coredump) - see partitions.csv.
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Panic forensics kept on the device. Without this the panic handler prints a
+# backtrace to UART0 and nothing else, which is worth nothing on a unit in the
+# field with no cable attached. With it, espcoredump writes an ELF dump of the
+# registers, the panic reason and the task stacks into the 64 KB `coredump`
+# partition, where it survives the reboot and is read back later with
+# `idf.py coredump-info`.
+#
+# Everything else is left at ESP-IDF's own defaults on purpose - ELF format,
+# SHA256 checksum, and CONFIG_ESP_COREDUMP_CAPTURE_DRAM OFF. DRAM capture
+# needs at least 128 KB of partition and this one is 64 KB, so grow
+# partitions.csv before turning it on.
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+
+# Keep the FIRST dump, not the last. ESP-IDF defaults the other way: a second
+# panic overwrites whatever was in the partition. For a unit in a boot loop
+# that is exactly the wrong choice - the crash that explains the loop is the
+# one that started it, and the default would replace it with a symptom of
+# itself, over and over, until someone finally reads the tenth copy.
+#
+# THE COST, ACCEPTED: DUMP_ERASE stops being optional. Once a dump is stored,
+# espcoredump refuses to write another until the partition is cleared, so a
+# unit whose dump is read but never erased captures no further panic for the
+# rest of its life. `tool-usb.py dump` therefore erases by default and `--keep`
+# is the deliberate opt-out; recovery from a half-finished read-out is simply
+# running the command again without it.
+CONFIG_ESP_COREDUMP_FLASH_NO_OVERWRITE=y
+
+# 240 MHz, the part's maximum, rather than the 160 MHz ESP-IDF defaults to.
+# An OTA fetch is TLS over Wi-Fi and the CPU is what pays for it; a download
+# that runs longer is a download with more chances to be interrupted. The
+# cost is current draw, which matters to a mains-powered product far less
+# than a failed update does.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 
 # R-VER-08: a freshly flashed image gets exactly one boot to confirm itself,
 # otherwise the bootloader reverts to the previous one. The confirmation lives
@@ -25,3 +66,33 @@ CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_ENABLE=y
 # costs no flash and evaluates no arguments. Default level is what ships.
 CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# The console is on UART0, NOT on USB.
+#
+# ESP32-S3 has one internal USB PHY, time-division shared between USB-OTG and
+# USB-Serial-JTAG - only one works at a time (TRM 32.3.1 and 33.3.1). The
+# TinyUSB stack switches that PHY to USB-OTG during its own install, which
+# turns USB-Serial-JTAG off, so a log left there would go silent the moment
+# the command channel came up. UART0 keeps the boot banner readable before USB
+# is even mounted, which is the whole reason the banner exists.
+#
+# The cost, accepted: no USB auto-download reset any more. Flash over UART0
+# with a bridge, or over USB with the BOOT button held. Do NOT burn
+# EFUSE_USB_PHY_SEL to "fix" this - it is one-way and takes USB-Serial-JTAG
+# download away in the bootloader too, not just in the app.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+
+# esp_tinyusb ships CDC off by default and its header refuses to compile
+# without this (`#error "TinyUSB CDC driver must be enabled in menuconfig"`).
+# One channel is all the command protocol needs; the FIFO sizes are the
+# component's defaults, and the 512-byte RX FIFO is the one the protocol's
+# "send one command and wait" rule exists to respect.
+CONFIG_TINYUSB_CDC_ENABLED=y
+CONFIG_TINYUSB_CDC_COUNT=1
+
+# No secondary console either. ESP-IDF defaults the secondary console to
+# USB-Serial-JTAG, which mirrors the log onto exactly the peripheral this
+# firmware takes the PHY away from - so every log line after usb_cdc_init()
+# would be written to a peripheral with no PHY behind it. Turning it off keeps
+# one log on one cable and removes the question entirely.
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y

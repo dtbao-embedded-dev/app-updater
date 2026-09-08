@@ -1,6 +1,5 @@
 /**
  * @file    ota_http.h
- * @author  dtbao
  * @date    2026-09-06
  * @brief   Fetches a firmware image over HTTPS and hands it to the caller one
  *          chunk at a time.
@@ -24,10 +23,6 @@ extern "C" {
 #endif
 
 /* -------------------------- Constants & macros ------------------------- */
-
-#define OTA_HTTP_VERSION_MAJOR 0
-#define OTA_HTTP_VERSION_MINOR 1
-#define OTA_HTTP_VERSION_PATCH 0
 
 /** Bytes handed to the chunk callback at a time. Tunable: larger costs RAM,
  *  smaller costs one callback per TCP segment. Measured, not guessed. */

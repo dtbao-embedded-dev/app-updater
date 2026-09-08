@@ -5,7 +5,7 @@ order: 1
 purpose: The two status enums the firmware uses, their numeric ranges, and where a vendor code is converted.
 status: active
 updated: 2026-09-06
-source: middleware/fw/include/fw.h, driver/bsp/include/bsp.h:33-49, middleware/storage/src/storage.c:209-227, middleware/ota_http/src/ota_http.c:189-205, driver/bsp/src/bsp.c:155-167
+source: middleware/fw/include/fw.h, driver/bsp/include/bsp.h, driver/ota/include/ota.h, driver/storage/include/storage.h, middleware/ota_http/src/ota_http.c:189-205, driver/bsp/src/bsp.c:155-167
 confidence: confirmed
 keywords: fw_err_t, bsp_err_t, FW_OK, BSP_OK, FW_ERR_PARAM, FW_ERR_STATE, from_esp_err, esp_err_t
 ---

@@ -1,6 +1,5 @@
 /**
  * @file    app.h
- * @author  dtbao
  * @date    2026-09-06
  * @brief   Brings every module up in order and runs the update cycle.
  *
@@ -19,10 +18,6 @@ extern "C" {
 #endif
 
 /* -------------------------- Constants & macros ------------------------- */
-
-#define APP_VERSION_MAJOR 0
-#define APP_VERSION_MINOR 1
-#define APP_VERSION_PATCH 0
 
 /** How often the update cycle is stepped. Shorter costs CPU, longer delays a
  *  state change the operator is watching for. */

@@ -1,6 +1,5 @@
 /**
  * @file    app.c
- * @author  dtbao
  * @date    2026-09-06
  * @brief   Brings every module up in order and runs the update cycle.
  *
@@ -13,22 +12,65 @@
 
 #include "app_priv.h"
 #include "bsp.h"
+#include "cfg.h"
+#include "coredump.h"
+#include "fw_config.h"
+#include "ota.h"
 #include "storage.h"
+
+#if FW_FEATURE_USB_COMMAND
+#include "command.h"
+#include "protocol.h"
+#include "usb_cdc.h"
+#endif
+
+#if FW_FEATURE_UPDATER
 #include "updater.h"
+#endif
 
 #include "esp_app_desc.h"
+#include "esp_chip_info.h"
 #include "esp_log.h"
-#include "esp_ota_ops.h"
-#include "esp_partition.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "nvs_flash.h"
 
+#if FW_FEATURE_USB_COMMAND
+#include "freertos/stream_buffer.h"
+#endif
+
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 /* --------------------------- Private macros ---------------------------- */
+
+/* Set by this component's CMakeLists from `git rev-parse`. It is read at
+ * CONFIGURE time, so it goes stale until CMake runs again - a banner may
+ * name the commit the build tree was configured on, not the one checked out
+ * now. Good enough to identify a field unit's image; not evidence in a
+ * bisect. */
+#ifndef APP_GIT_COMMIT
+#define APP_GIT_COMMIT "unknown"
+#endif
+
+#if FW_FEATURE_USB_COMMAND
+
+/* Bytes buffered between the USB service task and the dispatch task. The CDC
+ * RX FIFO is 512 and the protocol is synchronous - a host sends one command and
+ * waits - so this only has to absorb one frame arriving faster than the parser
+ * walks it, which it does trivially. Sized generously anyway because 4 KB next
+ * to the channel's 64 KB of frame buffers is not worth economising on. */
+#define APP_USB_RX_BYTES 4096U
+
+/* The dispatch task. It parses frames and runs handlers, the deepest of which
+ * writes flash through ota_session_write(); the frame buffers it works on live
+ * in the context below rather than on this stack. Priority matches the TinyUSB
+ * service task, so neither starves the other. */
+#define APP_USB_TASK_STACK 4096U
+#define APP_USB_TASK_PRIO  5U
+
+#endif /* FW_FEATURE_USB_COMMAND */
 
 /* ---------------------------- Private types ---------------------------- */
 
@@ -37,8 +79,16 @@
 typedef struct {
     bsp_t bsp;
     storage_t storage;
+    cfg_t cfg;
+#if FW_FEATURE_UPDATER
     updater_t updater;
-    storage_record_t record;
+#endif
+#if FW_FEATURE_USB_COMMAND
+    usb_cdc_t usb;
+    command_t command;
+    protocol_parser_t parser;
+    StreamBufferHandle_t usb_rx;
+#endif
 } app_ctx_t;
 
 /* ----------------------------- Static data ----------------------------- */
@@ -52,22 +102,42 @@ static app_ctx_t s_ctx;
 
 /* --------------------- Private function prototypes --------------------- */
 
+static void print_banner(void);
 static fw_err_t bring_up_storage(app_ctx_t *ctx);
 static fw_err_t bring_up_bsp(app_ctx_t *ctx);
-static fw_err_t bring_up_updater(app_ctx_t *ctx);
+static fw_err_t cfg_store_load(void *ctx, void *out, size_t cap, size_t *out_len);
+static fw_err_t cfg_store_save(void *ctx, const void *data, size_t len);
+static fw_err_t from_storage_err(storage_err_t err);
 static void confirm_or_roll_back(void);
+static void report_last_panic(void);
+
+#if FW_FEATURE_UPDATER
+static fw_err_t bring_up_updater(app_ctx_t *ctx);
 static void on_updater_state(void *ctx, updater_state_t state);
 static uint32_t now_ms(void);
+#endif
+
+#if FW_FEATURE_USB_COMMAND
+static fw_err_t bring_up_usb(app_ctx_t *ctx);
+static void on_usb_rx(void *ctx, const uint8_t *data, size_t len);
+static fw_err_t on_usb_reply(void *ctx, const uint8_t *data, size_t len);
+static bool is_slot_write_busy(void *ctx);
+static void usb_dispatch_task(void *arg);
+#endif
 
 /* -------------------------- Public functions --------------------------- */
 
 fw_err_t app_run(void) {
-    const esp_app_desc_t *desc = esp_app_get_description();
-    ESP_LOGI(TAG, "boot %s %s (idf %s)", desc->project_name, desc->version, desc->idf_ver);
+    print_banner();
 
     /* R-VER-08: decide the fate of a freshly flashed image before doing
      * anything that could make the decision impossible. */
     confirm_or_roll_back();
+
+    /* Then say why the last boot ended, while the log is still the boot log a
+     * person reads top-down. Needs no module up: driver/coredump has no
+     * lifecycle, it finds the partition by subtype on every call. */
+    report_last_panic();
 
     memset(&s_ctx, 0, sizeof(s_ctx));
 
@@ -85,19 +155,38 @@ fw_err_t app_run(void) {
         return err;
     }
 
+#if FW_FEATURE_UPDATER
     err = bring_up_updater(&s_ctx);
     if (err != FW_OK) {
         ESP_LOGE(TAG, "updater bring-up failed: %s", fw_err_str(err));
         return err;
     }
+#endif
 
+#if FW_FEATURE_USB_COMMAND
+    /* USB last, and deliberately after the updater: the very first frame may
+     * be an UPG_BEGIN, whose refusal depends on asking the update cycle
+     * whether it is already writing the slot. A channel that answered before
+     * there was anything to ask would race on the first command it served. */
+    err = bring_up_usb(&s_ctx);
+    if (err != FW_OK) {
+        ESP_LOGE(TAG, "usb bring-up failed: %s", fw_err_str(err));
+        return err;
+    }
+#endif
+
+    /* The loop runs whatever is switched on. With both features off it is a
+     * unit that boots, confirms its image and idles - which is still a
+     * complete product, just not a self-updating one. */
     for (;;) {
+#if FW_FEATURE_UPDATER
         const fw_err_t step_err = updater_step(&s_ctx.updater, now_ms());
         if (step_err != FW_OK) {
             /* Logged once, here, by the layer that decides what to do about it
              * (R-LOG-04). The cycle carries its own retry budget. */
             ESP_LOGW(TAG, "update step: %s", fw_err_str(step_err));
         }
+#endif
         vTaskDelay(pdMS_TO_TICKS(APP_TICK_MS));
     }
 }
@@ -115,34 +204,90 @@ void app_main(void) {
 
 /* Arguments are checked at the public boundary (R-SRC-06); helpers assume it. */
 
+/* printf, not ESP_LOGI: this is the one block meant to be read by a person
+ * looking at a terminal, so it carries no level, tag or timestamp and is not
+ * filtered out by CONFIG_LOG_DEFAULT_LEVEL. */
+static void print_banner(void) {
+    const esp_app_desc_t *desc = esp_app_get_description();
+
+    esp_chip_info_t chip;
+    esp_chip_info(&chip);
+    const unsigned rev = chip.revision;
+
+    uint8_t mac[6] = {0};
+    (void)bsp_mac_get(BSP_MAC_WIFI, mac);
+
+    /* One product, one chip. A switch over esp_chip_model_t would trip
+     * -Wswitch-enum on every model this repo will never be built for. */
+    const char *model = (chip.model == CHIP_ESP32S3) ? "ESP32-S3" : "unknown";
+
+    printf("\n");
+    printf("Project name: %s\n", desc->project_name);
+    printf("Version:      v%s\n", desc->version);
+    printf("Commit hash:  %s\n", APP_GIT_COMMIT);
+    printf("Time build:   %s - %s\n", desc->date, desc->time);
+    printf("ESP-IDF:      %s\n", desc->idf_ver);
+    printf("Chip type:    %s (revision v%u.%u)\n", model, rev / 100U, rev % 100U);
+    printf("Features:     %s%s%s%s%u core%s, %u MHz\n",
+           (chip.features & CHIP_FEATURE_WIFI_BGN) ? "Wi-Fi, " : "",
+           (chip.features & CHIP_FEATURE_BLE) ? "BLE, " : "",
+           (chip.features & CHIP_FEATURE_BT) ? "BT, " : "",
+           (chip.features & CHIP_FEATURE_EMB_PSRAM) ? "embedded PSRAM, " : "", (unsigned)chip.cores,
+           (chip.cores > 1) ? "s" : "", (unsigned)CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
+    printf("MAC:          %02x:%02x:%02x:%02x:%02x:%02x\n", (unsigned)mac[0], (unsigned)mac[1],
+           (unsigned)mac[2], (unsigned)mac[3], (unsigned)mac[4], (unsigned)mac[5]);
+    printf("\n");
+    fflush(stdout);
+}
+
 static fw_err_t bring_up_storage(app_ctx_t *ctx) {
-    esp_err_t nvs_err = nvs_flash_init();
-    if ((nvs_err == ESP_ERR_NVS_NO_FREE_PAGES) || (nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND)) {
-        ESP_LOGW(TAG, "nvs unusable (esp_err=0x%x), erasing", (unsigned)nvs_err);
-        if (nvs_flash_erase() != ESP_OK) {
-            return FW_ERR_IO;
-        }
-        nvs_err = nvs_flash_init();
-    }
-    if (nvs_err != ESP_OK) {
-        ESP_LOGE(TAG, "nvs_flash_init failed: esp_err=0x%x", (unsigned)nvs_err);
-        return FW_ERR_IO;
+    const storage_cfg_t st_cfg = storage_cfg_default();
+    const storage_err_t err    = storage_init(&ctx->storage, &st_cfg);
+    if (err != STORAGE_OK) {
+        ESP_LOGE(TAG, "storage_init: %s", storage_err_str(err));
+        return from_storage_err(err);
     }
 
-    const storage_cfg_t cfg = storage_cfg_default();
-    const fw_err_t err      = storage_init(&ctx->storage, &cfg);
-    if (err != FW_OK) {
-        return err;
-    }
+    /* The settings themselves live in middleware/cfg; storage is only where
+     * their bytes go, and these two wrappers are the only place in the image
+     * that knows which of the two it is. A missing or damaged record is not a
+     * failure - cfg_init() logs it, takes the compiled-in defaults and still
+     * reports FW_OK (R-CFG-02, R-CFG-03) - so anything non-OK from here is a
+     * real bring-up failure. */
+    const cfg_store_t store = {
+        .load = cfg_store_load,
+        .save = cfg_store_save,
+        .ctx  = ctx,
+    };
+    return cfg_init(&ctx->cfg, &store);
+}
 
-    /* A missing or damaged record is not a failure: the device boots on the
-     * compiled-in defaults and says so (R-CFG-02, R-CFG-03). */
-    const fw_err_t load_err = storage_record_load(&ctx->storage, &ctx->record);
-    if (load_err != FW_OK) {
-        ESP_LOGW(TAG, "record unusable (%s), using defaults", fw_err_str(load_err));
-        ctx->record = storage_record_default();
-    }
-    return FW_OK;
+/* What makes middleware/cfg's persistence concrete. Kept as two one-line
+ * wrappers rather than pointing cfg straight at storage_blob_*: their first
+ * parameter is the whole application context, which is what lets the settings
+ * be re-pointed at the reserved cfg_setting partition later without cfg or
+ * storage changing at all. */
+static fw_err_t cfg_store_load(void *ctx, void *out, size_t cap, size_t *out_len) {
+    app_ctx_t *app = (app_ctx_t *)ctx;
+    return from_storage_err(storage_blob_load(&app->storage, out, cap, out_len));
+}
+
+static fw_err_t cfg_store_save(void *ctx, const void *data, size_t len) {
+    app_ctx_t *app = (app_ctx_t *)ctx;
+    return from_storage_err(storage_blob_save(&app->storage, data, len));
+}
+
+/* The driver keeps its own code space (R-LAY-01) but shares the generic
+ * -1..-19 meanings, so the map is one for one (R-ERR-03) and this is the only
+ * place in the image that has to know both. STORAGE_ERR_CRC reaching cfg as
+ * FW_ERR_CRC is what makes it fall back to the defaults rather than fail
+ * bring-up on a record it could not have parsed. */
+static fw_err_t from_storage_err(storage_err_t err) {
+    /* Only the shared generic range -1..-19 maps one for one. A code from the
+     * driver's own space (-20 and below) has no fw_err_t twin, so it arrives
+     * as a plain I/O failure rather than as a number fw_err_str() cannot
+     * name. */
+    return ((int)err >= -19) ? (fw_err_t)err : FW_ERR_IO;
 }
 
 static fw_err_t bring_up_bsp(app_ctx_t *ctx) {
@@ -157,30 +302,49 @@ static fw_err_t bring_up_bsp(app_ctx_t *ctx) {
     return FW_OK;
 }
 
-static fw_err_t bring_up_updater(app_ctx_t *ctx) {
-    updater_cfg_t cfg     = updater_cfg_default();
-    cfg.check_interval_ms = ctx->record.check_interval_ms;
-    cfg.on_state          = on_updater_state;
-    cfg.on_state_ctx      = ctx;
+#if FW_FEATURE_UPDATER
 
-    const fw_err_t err = updater_init(&ctx->updater, &cfg);
+static fw_err_t bring_up_updater(app_ctx_t *ctx) {
+    uint32_t interval_ms = 0U;
+    fw_err_t err         = cfg_check_interval_ms_get(&ctx->cfg, &interval_ms);
+    if (err != FW_OK) {
+        return err;
+    }
+
+    /* updater_init() rejects an interval at or past its scheduling horizon,
+     * and cfg refuses to hold or load one - both the setter and the record
+     * validator check it. So this call can no longer fail on a stored value:
+     * before cfg existed, a CRC-valid record with a large interval failed
+     * bring-up here instead of falling back to the defaults. */
+    updater_cfg_t up_cfg     = updater_cfg_default();
+    up_cfg.check_interval_ms = interval_ms;
+    up_cfg.on_state          = on_updater_state;
+    up_cfg.on_state_ctx      = ctx;
+
+    err = updater_init(&ctx->updater, &up_cfg);
     if (err != FW_OK) {
         return err;
     }
     return updater_start(&ctx->updater, now_ms());
 }
 
+#endif /* FW_FEATURE_UPDATER */
+
 /* R-VER-08: a new image gets exactly one boot to prove itself. Without this
  * call the bootloader reverts on the next reset, which is the safe default but
- * makes every good update look like a failed one. */
+ * makes every good update look like a failed one.
+ *
+ * Deliberately outside FW_FEATURE_UPDATER: a unit that cannot fetch its own
+ * updates still has to confirm the image it was given, or the bootloader
+ * reverts it on the next reset. */
 static void confirm_or_roll_back(void) {
-    const esp_partition_t *running = esp_ota_get_running_partition();
-    esp_ota_img_states_t state;
-
-    if (esp_ota_get_state_partition(running, &state) != ESP_OK) {
+    bool is_pending      = false;
+    const ota_err_t read = ota_pending_verify_is(&is_pending);
+    if (read != OTA_OK) {
+        ESP_LOGW(TAG, "boot state: %s", ota_err_str(read));
         return;
     }
-    if (state != ESP_OTA_IMG_PENDING_VERIFY) {
+    if (!is_pending) {
         return;
     }
 
@@ -189,8 +353,48 @@ static void confirm_or_roll_back(void) {
      * An image that can confirm itself while broken defeats the rollback this
      * firmware exists to provide. */
     ESP_LOGW(TAG, "pending verify: confirming without a self-test (TODO)");
-    (void)esp_ota_mark_app_valid_cancel_rollback();
+    const ota_err_t err = ota_mark_valid();
+    if (err != OTA_OK) {
+        ESP_LOGE(TAG, "confirm image: %s", ota_err_str(err));
+    }
 }
+
+/* The one thing a field unit can say about its own last death without a host
+ * tool attached. The panic handler wrote the dump before `panic_restart()`, so
+ * by the time this runs the record is already in flash and the reason is
+ * already text - nothing here has to symbolise anything.
+ *
+ * Silent on a clean boot. A line saying "no core dump" every time would train
+ * a reader to skip the one boot where it matters.
+ *
+ * This does NOT erase what it read: the dump stays for `DUMP_READ` to fetch,
+ * and with CONFIG_ESP_COREDUMP_FLASH_NO_OVERWRITE on, erasing here would throw
+ * away the first crash of a boot loop - which is the one that explains it. */
+static void report_last_panic(void) {
+    coredump_state_t state = COREDUMP_ABSENT;
+    uint32_t size          = 0U;
+
+    if (coredump_info_get(&state, &size) != COREDUMP_OK) {
+        /* Not worth a warning: a unit whose coredump partition cannot be read
+         * has a table problem, and the boot that follows will show it. */
+        return;
+    }
+    if (state == COREDUMP_ABSENT) {
+        return;
+    }
+
+    char reason[COREDUMP_REASON_MAX];
+    const coredump_err_t err = coredump_reason_get(reason, sizeof(reason));
+
+    /* A dump with no readable reason is still worth announcing: it tells a
+     * reader to go fetch the bytes, which is more than silence does. */
+    ESP_LOGW(TAG, "last boot ended in a panic: %s",
+             (err == COREDUMP_OK) ? reason : "reason unavailable");
+    ESP_LOGW(TAG, "core dump %s, %u bytes - read it with tool-usb.py dump",
+             (state == COREDUMP_VALID) ? "valid" : "CORRUPT", (unsigned)size);
+}
+
+#if FW_FEATURE_UPDATER
 
 static void on_updater_state(void *ctx, updater_state_t state) {
     app_ctx_t *app = (app_ctx_t *)ctx;
@@ -207,5 +411,135 @@ static void on_updater_state(void *ctx, updater_state_t state) {
 static uint32_t now_ms(void) {
     return (uint32_t)(esp_timer_get_time() / 1000);
 }
+
+#endif /* FW_FEATURE_UPDATER */
+
+/* The command channel, in three parts: a byte pipe the USB task fills, a task
+ * that drains it into the parser, and the dispatcher the parser feeds.
+ *
+ * Bringing the stack up claims the chip's single internal USB PHY for USB-OTG,
+ * which turns USB-Serial-JTAG off - so the console is on UART0 by the time this
+ * runs (see workspace/0xF001/sdkconfig.defaults). */
+#if FW_FEATURE_USB_COMMAND
+
+static fw_err_t bring_up_usb(app_ctx_t *ctx) {
+    protocol_parser_reset(&ctx->parser);
+
+    ctx->usb_rx = xStreamBufferCreate((size_t)APP_USB_RX_BYTES, 1U);
+    if (ctx->usb_rx == NULL) {
+        return FW_ERR_NO_MEM;
+    }
+
+    const command_cfg_t cmd_cfg = {
+        .on_reply  = on_usb_reply,
+        .reply_ctx = ctx,
+        .is_busy   = is_slot_write_busy,
+        .busy_ctx  = ctx,
+    };
+    fw_err_t err = command_init(&ctx->command, &cmd_cfg);
+    if (err != FW_OK) {
+        return err;
+    }
+
+    /* The task exists before the transport does, so no byte can arrive with
+     * nothing to drain it (R-LFC-09). */
+    if (xTaskCreate(usb_dispatch_task, "usb_cmd", APP_USB_TASK_STACK, ctx, APP_USB_TASK_PRIO,
+                    NULL) != pdPASS) {
+        return FW_ERR_NO_MEM;
+    }
+
+    const usb_cdc_cfg_t usb_cfg = {.on_rx = on_usb_rx, .rx_ctx = ctx};
+    const usb_cdc_err_t usb_err = usb_cdc_init(&ctx->usb, &usb_cfg);
+    if (usb_err != USB_CDC_OK) {
+        ESP_LOGE(TAG, "usb_cdc_init: %s", usb_cdc_err_str(usb_err));
+        /* The driver keeps its own code space (R-LAY-01) but shares the
+         * generic -1..-19 meanings, so the map is one for one (R-ERR-03). */
+        return (usb_err == USB_CDC_ERR_PARAM) ? FW_ERR_PARAM : FW_ERR_IO;
+    }
+    return FW_OK;
+}
+
+/* Runs on the TinyUSB service task, which is also the only task draining the
+ * CDC RX FIFO - so it does exactly one thing and never blocks. A full buffer
+ * drops bytes on purpose: the frame then fails its CRC and the parser resyncs,
+ * which is a retry the host already knows how to do. Blocking here instead
+ * would stall the whole channel. */
+static void on_usb_rx(void *ctx, const uint8_t *data, size_t len) {
+    app_ctx_t *app = (app_ctx_t *)ctx;
+
+    const size_t sent = xStreamBufferSend(app->usb_rx, data, len, 0);
+    if (sent != len) {
+        ESP_LOGW(TAG, "usb rx buffer full, dropped %u of %u bytes", (unsigned)(len - sent),
+                 (unsigned)len);
+    }
+}
+
+static fw_err_t on_usb_reply(void *ctx, const uint8_t *data, size_t len) {
+    app_ctx_t *app              = (app_ctx_t *)ctx;
+    const usb_cdc_err_t usb_err = usb_cdc_write(&app->usb, data, len);
+
+    if (usb_err != USB_CDC_OK) {
+        /* Logged once, here, by the layer that decides what to do about it
+         * (R-LOG-04). Nothing is retried: a host that stopped reading will
+         * send its command again, and the answer is cheap to rebuild. */
+        ESP_LOGW(TAG, "usb reply (%u bytes): %s", (unsigned)len, usb_cdc_err_str(usb_err));
+        return (usb_err == USB_CDC_ERR_TIMEOUT) ? FW_ERR_TIMEOUT : FW_ERR_IO;
+    }
+    return FW_OK;
+}
+
+/* What UPG_BEGIN has to know before it erases a slot: whether the scheduled
+ * HTTP update is already writing the same one. Asked through a callback
+ * because the dispatcher lives below this layer and may not include
+ * updater.h.
+ *
+ * R-SAN-02, why the suppression below: `ctx` is only read, but the signature
+ * is `command_busy_cb_t`'s, not this function's to change - and widening that
+ * typedef to `const void *` for a style warning would ripple into
+ * middleware/command and its host fake. */
+/* cppcheck-suppress constParameterCallback */
+static bool is_slot_write_busy(void *ctx) {
+#if FW_FEATURE_UPDATER
+    const app_ctx_t *app  = (const app_ctx_t *)ctx;
+    updater_state_t state = UPDATER_STATE_IDLE;
+
+    if (updater_state_get(&app->updater, &state) != FW_OK) {
+        /* Unreadable means unknown, and unknown has to read as busy: refusing
+         * a transfer is recoverable, two writers on one slot is not. */
+        return true;
+    }
+    return (state == UPDATER_STATE_CHECKING) || (state == UPDATER_STATE_DOWNLOADING);
+#else
+    /* With the update cycle compiled out, USB is the only writer of a slot,
+     * so there is nobody to yield to. Answering "busy" here would refuse
+     * every transfer on a build whose only way in is this channel. */
+    (void)ctx;
+    return false;
+#endif
+}
+
+/* Parsing and dispatch happen here, never in the USB callback: a handler may
+ * hold the channel for a flash write, and doing that inside the callback would
+ * stop the FIFO being drained at all. */
+static void usb_dispatch_task(void *arg) {
+    app_ctx_t *ctx = (app_ctx_t *)arg;
+
+    for (;;) {
+        uint8_t chunk[64];
+        const size_t got = xStreamBufferReceive(ctx->usb_rx, chunk, sizeof(chunk), portMAX_DELAY);
+
+        for (size_t i = 0; i < got; ++i) {
+            protocol_req_t req;
+            if (protocol_parser_feed(&ctx->parser, chunk[i], &req)) {
+                const fw_err_t err = command_on_frame(&ctx->command, &req);
+                if (err != FW_OK) {
+                    ESP_LOGW(TAG, "command 0x%04X: %s", (unsigned)req.command, fw_err_str(err));
+                }
+            }
+        }
+    }
+}
+
+#endif /* FW_FEATURE_USB_COMMAND */
 
 /*** end of file ***/

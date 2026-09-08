@@ -1,6 +1,5 @@
 /**
  * @file    bsp.c
- * @author  dtbao
  * @date    2026-09-06
  * @brief   Board pin map, clock and flash geometry for product 0xF001.
  *
@@ -11,20 +10,26 @@
 
 #include "bsp.h"
 
+#include "bsp_priv.h"
+
 #include "driver/gpio.h"
 #include "esp_err.h"
+#include "esp_flash.h"
 #include "esp_log.h"
+#include "esp_mac.h"
+#include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include <string.h>
 
 /* --------------------------- Private macros ---------------------------- */
 
-/* TODO(dtbao): fill these three in from the 0xF001 schematic before the first
+/* TODO(dtbao): fill these two in from the 0xF001 schematic before the first
  * board bring-up. They are the only pin literals in the repo (R-RPO-04) and
  * the values below are placeholders, not a measured pinout. */
 #define BSP_REV_A_LED_STATUS_GPIO 2
 #define BSP_REV_A_LED_ACTIVE_HIGH true
-#define BSP_REV_A_FLASH_SIZE      (4U * 1024U * 1024U)
 
 /* ---------------------------- Private types ---------------------------- */
 
@@ -32,13 +37,14 @@
 
 static const char *TAG = "bsp";
 
-/** Board table, indexed by revision. Add a row rather than editing one. */
+/** Board table, indexed by revision. Add a row rather than editing one.
+ *  Only what the schematic decides lives here; `flash_size_bytes` is asked
+ *  of the chip at init instead, so it cannot drift from the part fitted. */
 static const bsp_board_t s_board_table[] = {
     [0] =
         {
-            .led_status_gpio  = BSP_REV_A_LED_STATUS_GPIO,
-            .led_active_high  = BSP_REV_A_LED_ACTIVE_HIGH,
-            .flash_size_bytes = BSP_REV_A_FLASH_SIZE,
+            .led_status_gpio = BSP_REV_A_LED_STATUS_GPIO,
+            .led_active_high = BSP_REV_A_LED_ACTIVE_HIGH,
         },
 };
 
@@ -78,6 +84,25 @@ bsp_err_t bsp_init(bsp_t *dev, const bsp_cfg_t *cfg) {
 
     memset(dev, 0, sizeof(*dev));
     dev->board = s_board_table[cfg->board_rev];
+
+    /* Read from the part rather than compiled in: a board built with the
+     * wrong density, or a table nobody updated, is then a value that differs
+     * from partitions.csv instead of one that silently agrees with it. */
+    const esp_err_t flash_err = esp_flash_get_size(NULL, &dev->board.flash_size_bytes);
+    if (flash_err != ESP_OK) {
+        ESP_LOGE(TAG, "flash size query failed: esp_err=0x%x", (unsigned)flash_err);
+        return from_esp_err(flash_err);
+    }
+
+    /* Said once, in the log, because it is the first question a bench asks and
+     * the answer is not obvious from the cables: which cable carries the log
+     * and which carries the command channel. The numbers come from the port,
+     * so this line reads correctly on whatever chip the port was written for;
+     * why the console is not on USB is the port's story to tell. */
+    const bsp_port_pins_t pins = bsp_port_pins_get();
+    ESP_LOGI(TAG, "usb-otg on gpio%ld/%ld (d+/d-), console on uart0 gpio%ld/%ld (tx/rx)",
+             (long)pins.usb_dp_gpio, (long)pins.usb_dm_gpio, (long)pins.console_tx_gpio,
+             (long)pins.console_rx_gpio);
 
     if (dev->board.led_status_gpio != BSP_GPIO_NONE) {
         const gpio_config_t io = {
@@ -146,6 +171,41 @@ bsp_err_t bsp_led_status_set(bsp_t *dev, bool is_on) {
         return from_esp_err(err);
     }
     return BSP_OK;
+}
+
+/* The SDK's own enum, not a second table: every kind this driver names has to
+ * map onto one, and a switch is what makes a new kind a compile error here
+ * rather than a wrong MAC on the wire. */
+bsp_err_t bsp_mac_get(bsp_mac_kind_t kind, uint8_t *out) {
+    if (out == NULL) {
+        return BSP_ERR_PARAM;
+    }
+
+    esp_mac_type_t type;
+    switch (kind) {
+        case BSP_MAC_WIFI:
+            type = ESP_MAC_WIFI_STA;
+            break;
+        case BSP_MAC_BLE:
+            type = ESP_MAC_BT;
+            break;
+        default:
+            return BSP_ERR_PARAM;
+    }
+
+    const esp_err_t err = esp_read_mac(out, type);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "read mac kind=%d failed: esp_err=0x%x", (int)kind, (unsigned)err);
+        return from_esp_err(err);
+    }
+    return BSP_OK;
+}
+
+void bsp_restart(uint32_t grace_ms) {
+    if (grace_ms > 0U) {
+        vTaskDelay(pdMS_TO_TICKS(grace_ms));
+    }
+    esp_restart();
 }
 
 /* -------------------------- Private functions -------------------------- */

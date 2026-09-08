@@ -33,16 +33,18 @@ jobs:
             exit 1
           fi
 
-      # Through tool-esp.py, like CI: the workspace path and the factory image
-      # name live in the script, and `merge` takes that name from VERSION - which
-      # the gate above has already proved equals the tag.
+      # Through tool-esp.py, like CI: the `-C` into the workspace and the
+      # factory image name live in the script, and `merge` takes that name from
+      # VERSION - which the gate above has already proved equals the tag. `-w`
+      # names the product because nothing is inferred and a runner has no
+      # .env.esp; it must stay in step with the paths the next step copies from.
       - name: Build
         shell: bash
         run: |
           . "$IDF_PATH/export.sh"
-          python docs/scripts/tool-esp.py build
-          python docs/scripts/tool-esp.py size | tee size-report.txt
-          python docs/scripts/tool-esp.py merge
+          python docs/scripts/tool-esp.py -w 0xF001 build
+          python docs/scripts/tool-esp.py -w 0xF001 size | tee size-report.txt
+          python docs/scripts/tool-esp.py -w 0xF001 merge
 
       - name: Collect the artifacts a field unit needs
         shell: bash
@@ -51,9 +53,18 @@ jobs:
           build="workspace/0xF001/build"
           mkdir -p dist
 
-          # Provisioning a blank board. The name comes from VERSION via
-          # `tool-esp.py merge`, and the tag gate above proved they agree.
-          cp "$build/app-updater-${GITHUB_REF_NAME}-factory.bin" dist/
+          # Provisioning a blank board. `tool-esp.py merge` builds the name
+          # from the project() token, the workspace and today's date, so this
+          # step cannot spell it out in advance - it matches the shape and
+          # insists on finding exactly one. A glob that silently matched none
+          # would ship a release missing the only asset that can flash a blank
+          # board, which is the v0.1.0 defect all over again.
+          factory=$(ls "$build"/bl_*.bin 2>/dev/null | wc -l)
+          if [ "$factory" -ne 1 ]; then
+            echo "::error::expected exactly one $build/bl_*.bin, found $factory"
+            exit 1
+          fi
+          cp "$build"/bl_*.bin dist/
           cp "$build/bootloader/bootloader.bin"                  dist/
           cp "$build/partition_table/partition-table.bin"        dist/
           # v0.1.0 shipped without this and its own flash_args asked for it, so
@@ -73,12 +84,26 @@ jobs:
           # Diagnosing a unit that is already in the field. The .elf is the only
           # thing that can turn a panic backtrace back into line numbers, and it
           # must be the exact one that produced the .bin.
+          #
+          # Which .elf that is, is answerable from the release alone: ESP-IDF
+          # embeds sha256(app_updater.elf) in the image as `app_elf_sha256`, and
+          # that is the same number the panic handler prints as "ELF file
+          # SHA256:" and the same number a core dump carries. So SHA256SUMS
+          # below doubles as the dump-to-release index - grep it for the hash
+          # from the crash and the matching release is the one that answers.
           cp "$build/app_updater.elf" dist/
           cp "$build/app_updater.map" dist/
 
           # What this image was built from: the resolved config and the budget.
-          cp workspace/0xF001/sdkconfig dist/
-          cp size-report.txt            dist/
+          #
+          # From build/, NOT from the workspace: workspace/0xF001/CMakeLists.txt
+          # sets SDKCONFIG to ${CMAKE_BINARY_DIR}/sdkconfig on purpose, so that
+          # a generated config cannot outlive a clean and go on building against
+          # an edit to sdkconfig.defaults that never took effect. There is no
+          # sdkconfig in the workspace to copy, and with `set -eu` above this
+          # step aborts the whole release if it tries.
+          cp "$build/sdkconfig" dist/
+          cp size-report.txt    dist/
 
           # The OTA path checks the image it downloaded; publishing the digest
           # is what lets anyone else check it too.

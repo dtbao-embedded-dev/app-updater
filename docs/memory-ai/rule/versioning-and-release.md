@@ -4,7 +4,7 @@ category: rule
 order: 5
 purpose: Where the version number lives, what bumps it, and the order of a release.
 status: active
-updated: 2026-09-06
+updated: 2026-09-07
 source: VERSION, CHANGELOG.md, workspace/0xF001/CMakeLists.txt, .github/workflows/release.yml
 confidence: confirmed
 keywords: VERSION, PROJECT_VER, CHANGELOG.md, docs/CHANGELOG, SemVer, Unreleased, esp_app_get_description

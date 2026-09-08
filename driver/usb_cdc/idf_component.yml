@@ -1,0 +1,9 @@
+# IDF Component Manager manifest.
+#
+# ESP-IDF v6.1 ships no USB device stack: the components directory holds
+# esp_driver_usb_serial_jtag, esp_hal_usb and esp_usb_cdc_rom_console, and no
+# tinyusb. The stack for a device with our own VID/PID has to come from the
+# component registry, so this is the first managed dependency in the repo.
+# managed_components/ and dependencies.lock are gitignored (.gitignore:5-6).
+dependencies:
+  espressif/esp_tinyusb: "~2.0.0"

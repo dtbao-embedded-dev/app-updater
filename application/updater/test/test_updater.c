@@ -1,6 +1,5 @@
 /**
  * @file    test_updater.c
- * @author  dtbao
  * @date    2026-09-06
  * @brief   Host tests for the update cycle's scheduling and state guards.
  *

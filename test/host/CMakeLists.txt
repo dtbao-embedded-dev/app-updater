@@ -1,8 +1,10 @@
 # Host test harness (R-TST-02: pure logic must run without a board).
 #
 # The tests themselves live next to their modules (R-TST-07); this directory
-# only holds what it takes to compile and run them on a PC: the Unity runner
-# and the fake for the one vendor header the logic includes.
+# only holds what it takes to compile and run them on a PC: the Unity runner,
+# `fake/` - host implementations of our own driver contracts, which is where a
+# test of middleware belongs - and `stub/`, the shrinking set of vendor headers
+# that middleware still reaches for directly.
 #
 #   cmake -S test/host -B build/host && cmake --build build/host && ctest --test-dir build/host
 #
@@ -62,12 +64,34 @@ add_executable(host_tests
     runner.c
     "${REPO_ROOT}/middleware/fw/src/fw.c"
     "${REPO_ROOT}/middleware/fw/test/test_fw.c"
+    "${REPO_ROOT}/middleware/protocol/src/protocol.c"
+    "${REPO_ROOT}/middleware/protocol/test/test_protocol.c"
+    "${REPO_ROOT}/middleware/command/src/command.c"
+    "${REPO_ROOT}/middleware/command/src/command_dump.c"
+    "${REPO_ROOT}/middleware/command/src/command_upgrade.c"
+    "${REPO_ROOT}/middleware/command/test/test_command.c"
+    "${REPO_ROOT}/middleware/cfg/src/cfg.c"
+    "${REPO_ROOT}/middleware/cfg/test/test_cfg.c"
+    fake/bsp_fake.c
+    fake/coredump_fake.c
+    fake/nvs_fake.c
+    fake/ota_fake.c
+    "${REPO_ROOT}/driver/storage/src/storage.c"
+    "${REPO_ROOT}/driver/storage/test/test_storage.c"
     "${REPO_ROOT}/application/updater/src/updater.c"
     "${REPO_ROOT}/application/updater/test/test_updater.c")
 
 target_include_directories(host_tests PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}/stub"
+    "${CMAKE_CURRENT_LIST_DIR}/fake"
+    "${REPO_ROOT}/driver/bsp/include"
+    "${REPO_ROOT}/driver/coredump/include"
+    "${REPO_ROOT}/driver/ota/include"
+    "${REPO_ROOT}/driver/storage/include"
     "${REPO_ROOT}/middleware/fw/include"
+    "${REPO_ROOT}/middleware/protocol/include"
+    "${REPO_ROOT}/middleware/command/include"
+    "${REPO_ROOT}/middleware/cfg/include"
     "${REPO_ROOT}/application/updater/include")
 
 target_link_libraries(host_tests PRIVATE unity)

@@ -1,0 +1,16 @@
+# Test code, not production code. Two checks from the root config are wrong
+# here and must stay right everywhere else (R-SAN-02: a suppression carries its
+# reason).
+#
+#   misc-use-internal-linkage
+#       A test function is deliberately non-static: test/host/runner.c calls it
+#       by name. Making it static would silently stop the test running.
+#
+#   clang-analyzer-optin.core.EnumCastOutOfRange
+#       Casting a value outside the enum is the thing under test - it proves
+#       the switch fallthrough handles a value that arrived from outside.
+---
+InheritParentConfig: true
+Checks: >
+  -misc-use-internal-linkage,
+  -clang-analyzer-optin.core.EnumCastOutOfRange

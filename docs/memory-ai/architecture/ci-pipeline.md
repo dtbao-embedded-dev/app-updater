@@ -4,10 +4,10 @@ category: architecture
 order: 4
 purpose: What GitHub Actions runs on a push and on a tag, in which container, and which gates can stop a release.
 status: inferred
-updated: 2026-09-07
+updated: 2026-09-08
 source: .github/workflows/ci.yml, .github/workflows/release.yml, docs/scripts/tool-release.py
 confidence: confirmed
-keywords: GitHub Actions, ci.yml, release.yml, espressif/idf:v6.1, ctest, clang-format, clang-tidy, cppcheck, gitleaks, ASan, UBSan, gh release create, SHA256SUMS
+keywords: GitHub Actions, ci.yml, release.yml, espressif/idf:v6.1, ctest, clang-format, clang-tidy, cppcheck, gitleaks, ASan, UBSan, gh release create, SHA256SUMS, bootloader.elf, app_elf_sha256, dump-to-release index
 ---
 
 # CI and Release Pipeline
@@ -17,7 +17,9 @@ keywords: GitHub Actions, ci.yml, release.yml, espressif/idf:v6.1, ctest, clang-
 🟢 **`ci.yml` has run.** First run (34031391115) went 4/6: `clang-format`, both
 host-test jobs and the secret scan passed on the first try; `firmware` and
 `analyse` failed, and both failures were real rather than cosmetic — see below.
-`release.yml` has now run too, once, and went green on its first attempt (34032701944) — both jobs, eight artifacts attached.
+`release.yml` has run once and went green on its first attempt (34032701944) — both
+jobs, eight artifacts attached. **That green does not cover the workflow as it
+stands now:** see below.
 
 Two things the first run taught, both now fixed:
 
@@ -38,9 +40,26 @@ gate above exists because nothing checked the output against itself.
 **What the first `release.yml` run proved.** Both gates fired and let the tag
 through rather than being untested: the tag matched `VERSION`, and
 `docs/CHANGELOG/v0.1.0.md` existed because the release script had written it
-minutes earlier. The published assets are `app_updater.bin` (197,504 bytes),
+minutes earlier. The published assets were `app_updater.bin` (197,504 bytes),
 its `.elf` and `.map`, the bootloader, the partition table, `flash_args`, the
-size report, and a `SHA256SUMS` over all of them.
+size report, and a `SHA256SUMS` over all of them — **eight**.
+
+🟡 **What that green run does NOT cover.** It ran the workflow as it stood at
+tag `v0.1.0` (`38fb950`). The commit that fixed the unflashable-set defect,
+`2c818c7`, came **after** the tag and added three more files to `dist/` —
+`ota_data_initial.bin`, `sdkconfig` and `size-report.txt`. None of those three
+lines has ever been executed by CI, and one of them was **wrong**: it copied
+`workspace/0xF001/sdkconfig`, a path that cannot exist, because
+`workspace/0xF001/CMakeLists.txt:48` puts the generated config in
+`${CMAKE_BINARY_DIR}` on purpose. With `set -eu` in that step, the next release
+would have aborted there. Corrected to `$build/sdkconfig` and checked by
+replaying the whole collect step against a real build tree, since only a tag
+push runs the job itself.
+
+The lesson is the same one the first run taught, one level up: **a green run
+proves the workflow that ran, not the workflow in the file.** A fix committed
+after the last tag is untested code until the next tag, and a `cp` under
+`set -eu` fails the release rather than degrading it.
 
 ## CI — `.github/workflows/ci.yml`
 
@@ -96,7 +115,7 @@ toolchain and the plain runner has the `gh` CLI.
      |-------|-------|-----|
      | Provision a blank board | `bl_<project>_<pid>_<MonDDYY>.bin` (copied by glob, and the job fails unless exactly one matches), `bootloader.bin`, `partition-table.bin`, `ota_data_initial.bin`, `flash_args` | A bench. The factory image is one `esptool` write at `0x0`; the pieces are there for a partial reflash. |
      | Update a board | `app_updater.bin` | The OTA payload the updater downloads |
-     | Diagnose one already in the field | `app_updater.elf`, `app_updater.map`, `sdkconfig`, `size-report.txt` | The `.elf` is the only thing that turns a panic backtrace into line numbers, and it must be the exact one that built the `.bin` |
+     | Diagnose one already in the field | `app_updater.elf`, `app_updater.map`, `bootloader.elf`, `bootloader.map`, `sdkconfig`, `size-report.txt` | The `.elf` is the only thing that turns a panic backtrace into line numbers, and it must be the exact one that built the `.bin`. **Which one that is, is answerable from the release alone:** ESP-IDF embeds `sha256(app_updater.elf)` in the image as `app_elf_sha256`, the same number a core dump carries and the panic handler prints, so `SHA256SUMS` doubles as the dump-to-release index. The bootloader's pair is there because `espcoredump` is app-side only — a fault before the app starts leaves no dump at all, just an address on UART0 |
 
      Plus `SHA256SUMS` over all of them.
    - **Gate:** every `.bin` named in `flash_args` must exist in `dist/`, and

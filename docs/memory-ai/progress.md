@@ -173,9 +173,11 @@ updated: 2026-09-08
 9b. **Archive `app_firmware`'s `.elf` when that repo ships.** The read-out path
    exists now, but a dump is only decodable against the exact build that
    crashed, and a crash there is the likely one — it is the product and it runs
-   almost all the time. `release.yml` here archives `app_updater.elf`; the
-   sibling repo is empty and its first release has to do the same, or a dump
-   fetched from the field is bytes with nothing to decode them against.
+   almost all the time. `release.yml` here archives `app_updater.elf` and the
+   bootloader's pair, and its `SHA256SUMS` doubles as the dump-to-release index
+   because `app_elf_sha256` **is** `sha256(app_updater.elf)`. The sibling repo
+   is empty and its first release has to do the same, or a dump fetched from
+   the field is bytes with nothing to decode them against.
 9c. **Prove the core dump path on hardware.** Force a panic, let it reboot,
    check the boot log names the reason, then `tool-usb.py dump crash.bin` and
    `esp-coredump info_corefile --core-format raw` must print a backtrace into

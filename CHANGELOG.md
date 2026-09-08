@@ -94,6 +94,19 @@ below, and leaves a fresh empty `[Unreleased]` here.
   it and needs network for that.
 
 ### Fixed
+- **`release.yml` would have aborted the next release.** The step that collects
+  artifacts copied `workspace/0xF001/sdkconfig` - a path that cannot exist,
+  because `workspace/0xF001/CMakeLists.txt:48` puts the generated config in
+  `${CMAKE_BINARY_DIR}` on purpose so it cannot outlive a clean. With `set -eu`
+  in that step, `cp` failing takes the whole release with it. Corrected to
+  `$build/sdkconfig`.
+  **How it survived:** the one green `release.yml` run was at tag `v0.1.0`
+  (`38fb950`), and this line arrived afterwards in `2c818c7` - the commit that
+  fixed v0.1.0's unflashable-asset set - along with `ota_data_initial.bin` and
+  `size-report.txt`. All three had never been executed by CI. A green run
+  proves the workflow that ran, not the workflow in the file. Verified this
+  time by replaying the whole collect step against a real build tree, since
+  only a tag push runs the job.
 - A `TODO` in `application/updater/src/updater.c` told whoever writes the
   DOWNLOADING step to call `esp_ota_write()` and `esp_ota_set_boot_partition()`
   directly - exactly what the new layer rule forbids. It now names
@@ -115,6 +128,14 @@ below, and leaves a fresh empty `[Unreleased]` here.
   offsets from its release notes, or the factory image from the next tag.
 
 ### Added
+- **The release now publishes `bootloader.elf` and `bootloader.map`.** The app
+  already shipped both; the bootloader shipped only its `.bin`. That gap
+  matters more than the symmetry suggests: `espcoredump` is app-side only
+  (`BOOTLOADER_BUILD` excludes it), so a fault before the app starts leaves
+  **no core dump at all** - just an address on UART0 - and `bootloader.elf` is
+  the only thing that resolves it. It is also the failure that matters most,
+  because a unit that dies there never reaches the USB command channel that
+  would let anyone ask it anything.
 - **`tool-usb.py dump FILE`**, the host end of the read-out. `DUMP_INFO` for
   the size, a read loop in 4096-byte chunks, the file written **once from a
   complete transfer**, and only then `DUMP_ERASE` - so the device keeps the

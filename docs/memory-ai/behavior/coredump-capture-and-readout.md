@@ -132,9 +132,12 @@ download mode.
 every address, and a wrong `.elf` yields a plausible, wrong backtrace **with no
 error**. That is the failure mode to fear here, not a missing file.
 
-The dump carries `app_elf_sha256` so the tool can tell you, and `release.yml`
-archives `app_updater.elf` with its `.map` and `sdkconfig` for exactly this
-reason.
+The dump carries `app_elf_sha256` so the tool can tell you — and you can tell
+without the tool, because that field **is** `sha256(app_updater.elf)`. So the
+`SHA256SUMS` a release publishes doubles as the dump-to-release index: grep it
+for the hash the crash reported and the matching release is the one that
+answers. `release.yml` archives `app_updater.elf` with its `.map`, the
+bootloader's pair, `sdkconfig` and the size report for exactly this.
 
 🔴 **Gap: `app_firmware` has no such archive yet.** The sibling repo is empty,
 and a crash there is the likely one — it is the product and it runs almost all

@@ -1,7 +1,7 @@
 # App Updater
 
 [![CI](https://github.com/dtbao-embedded-dev/app-updater/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/dtbao-embedded-dev/app-updater/actions/workflows/ci.yml)
-[![version](https://img.shields.io/badge/version-0.1.0-blue)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.1.1-blue)](CHANGELOG.md)
 [![target](https://img.shields.io/badge/target-ESP32--S3-e7352c)](#hardware-assumptions)
 [![ESP-IDF](https://img.shields.io/badge/ESP--IDF-v6.1-informational)](https://docs.espressif.com/projects/esp-idf/en/v6.1/)
 [![C](https://img.shields.io/badge/C-11%20%28gnu11%29-lightgrey)](#build)
@@ -13,7 +13,7 @@ a USB cable from a PC — and lets the bootloader confirm it or roll back on the
 next boot.
 
 - **Target**: ESP32-S3, ESP-IDF **v6.1**, C11 (`-std=gnu11`)
-- **Version**: 0.1.0 — see [CHANGELOG.md](CHANGELOG.md)
+- **Version**: 0.1.1 — see [CHANGELOG.md](CHANGELOG.md)
 
 > **This repo is one of a pair.** `app_updater` (this one) is the small recovery
 > app; `app_firmware` (sibling repo) is the product. They occupy the two app

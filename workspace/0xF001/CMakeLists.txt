@@ -39,6 +39,25 @@ set(EXTRA_COMPONENT_DIRS
 file(READ "${CMAKE_CURRENT_LIST_DIR}/../../VERSION" PROJECT_VER)
 string(STRIP "${PROJECT_VER}" PROJECT_VER)
 
+# And CMake has to be told to watch that file, because `file(READ)` does not
+# register a dependency on what it reads. Without this line a version bump
+# changes nothing until something else forces a reconfigure: the cache still
+# holds the old PROJECT_VER, ninja has no reason to re-run cmake, and the image
+# reports the previous number while VERSION reads the new one.
+#
+# Observed, not assumed: bumping 0.1.0 -> 0.1.1 and rebuilding left
+# `esptool image-info` reporting `App version: 0.1.0`; deleting CMakeCache.txt
+# and rebuilding reported 0.1.1. CI and the release workflow never saw it,
+# because a fresh checkout configures from scratch - which is exactly what
+# makes it a local-only trap that ships nothing wrong and wastes an afternoon.
+#
+# It also makes `versioning-and-release.md` step 6 honest. That step says a
+# mismatch between the reported version and VERSION means "a copy escaped step
+# 1", and sends the reader hunting for a hardcoded number. There is no such
+# copy; there was a missing dependency.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+             "${CMAKE_CURRENT_LIST_DIR}/../../VERSION")
+
 # The generated sdkconfig lives in the build tree, not next to this file.
 # ESP-IDF reads sdkconfig.defaults only when sdkconfig does not exist, so a
 # sdkconfig sitting in the source tree outlives every clean and silently

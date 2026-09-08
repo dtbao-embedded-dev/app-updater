@@ -4,10 +4,10 @@ category: architecture
 order: 3
 purpose: How the 0xF001 image is configured and compiled, including the main-less ESP-IDF build and the warning policy.
 status: active
-updated: 2026-09-07
+updated: 2026-09-08
 source: workspace/0xF001/CMakeLists.txt, workspace/0xF001/sdkconfig.defaults, VERSION, .clang-format
 confidence: confirmed
-keywords: EXTRA_COMPONENT_DIRS, COMPONENTS, house_warnings, PROJECT_VER, sdkconfig.defaults, idf.py, Werror, esp32s3, fw_config.h, FW_FEATURE_USB_COMMAND, FW_FEATURE_UPDATER, feature switch
+keywords: EXTRA_COMPONENT_DIRS, COMPONENTS, house_warnings, PROJECT_VER, CMAKE_CONFIGURE_DEPENDS, file(READ), sdkconfig.defaults, idf.py, Werror, esp32s3, fw_config.h, FW_FEATURE_USB_COMMAND, FW_FEATURE_UPDATER, feature switch
 ---
 
 # Build and Toolchain
@@ -132,6 +132,30 @@ reads it into `PROJECT_VER`, which lands in the image header, so
 Nothing else in the repo restates the number except the README badge line and
 the changelog headings. See
 [../rule/versioning-and-release.md](../rule/versioning-and-release.md).
+
+**And CMake is told to watch it.** `file(READ)` does not register a dependency
+on what it reads, so reading `VERSION` that way is not enough on its own:
+
+```cmake
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+             "${CMAKE_CURRENT_LIST_DIR}/../../VERSION")
+```
+
+Without that line a version bump changes nothing until something else forces a
+reconfigure. The cache keeps the old `PROJECT_VER`, ninja has no reason to
+re-run cmake, and the image reports the previous number while `VERSION` reads
+the new one.
+
+**Observed on 2026-09-08, not assumed:** after `0.1.0 -> 0.1.1`, a rebuild left
+`esptool image-info` reporting `App version: 0.1.0`; deleting `CMakeCache.txt`
+and rebuilding reported `0.1.1`. CI and the release workflow never saw it,
+because a fresh checkout configures from scratch — which is what made it a
+**local-only** trap: it ships nothing wrong and costs an afternoon. The
+published `v0.1.1` image reports `0.1.1` correctly.
+
+The fix was proved by replaying the failure: with the line in place, editing
+`VERSION` alone triggers a reconfigure and the image follows, in both
+directions.
 
 ## Reproduction notes
 

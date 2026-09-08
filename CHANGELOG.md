@@ -10,6 +10,21 @@ below, and leaves a fresh empty `[Unreleased]` here.
 
 ## [Unreleased]
 
+### Fixed
+- **A version bump did not reach a local build.** `workspace/0xF001/CMakeLists.txt`
+  read the repo-root `VERSION` with `file(READ)`, which does **not** register a
+  CMake dependency on what it reads - so after a bump the cache kept the old
+  `PROJECT_VER`, ninja had no reason to re-run cmake, and the image reported the
+  previous number while `VERSION` read the new one. Named in
+  `CMAKE_CONFIGURE_DEPENDS` now. **Found by following the release rule's own
+  step 6** during the v0.1.1 cut: it reported `App version: 0.1.0` against a
+  `VERSION` of `0.1.1`. CI and the release workflow never saw it, because a
+  fresh checkout configures from scratch - the published v0.1.1 image reports
+  `0.1.1` correctly, so this shipped nothing wrong and only cost local time.
+  That is also why step 6's diagnosis was misleading: it blamed "a copy escaped
+  step 1" and sent the reader hunting for a hardcoded number that does not
+  exist. Both the rule and the build doc now name the real cause.
+
 _Nothing yet._
 
 ## Released

@@ -4,7 +4,7 @@ category: rule
 order: 5
 purpose: Where the version number lives, what bumps it, and the order of a release.
 status: active
-updated: 2026-09-07
+updated: 2026-09-08
 source: VERSION, CHANGELOG.md, workspace/0xF001/CMakeLists.txt, .github/workflows/release.yml
 confidence: confirmed
 keywords: VERSION, PROJECT_VER, CHANGELOG.md, docs/CHANGELOG, SemVer, Unreleased, esp_app_get_description
@@ -71,7 +71,14 @@ unit".
    `release/*` → `developing` → `main`, merged rather than squashed so the
    release commit survives to be tagged.
 6. Before tagging: rebuild and confirm the version the firmware reports is the
-   one you typed. A mismatch means a copy escaped step 1.
+   one you typed. A mismatch means either a copy escaped step 1, or — the case
+   that actually happened — CMake never re-read `VERSION`. `file(READ)` does not
+   make CMake watch a file, so
+   `workspace/<pid>/CMakeLists.txt` names it in `CMAKE_CONFIGURE_DEPENDS`;
+   before that line existed, a local rebuild after a bump kept the old
+   `PROJECT_VER` and this step reported a mismatch with no hardcoded copy to
+   find. See
+   [../architecture/build-and-toolchain.md](../architecture/build-and-toolchain.md).
 7. Record the flash and RAM figures with each release and compare them with the
    previous one. `python docs/scripts/tool-esp.py size` prints both.
 8. **Verify a rollback works before shipping the update mechanism.** An update

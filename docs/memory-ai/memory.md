@@ -760,7 +760,7 @@ how many bytes - so logging in both places would double every failure line.
 - [../data/error-code-model.md](../data/error-code-model.md) — the two code spaces in detail
 
 ### [architecture] Build and Toolchain
-*`architecture/build-and-toolchain.md` - How the 0xF001 image is configured and compiled, including the main-less ESP-IDF build and the warning policy. - status: active - source: workspace/0xF001/CMakeLists.txt, workspace/0xF001/sdkconfig.defaults, VERSION, .clang-format - keywords: EXTRA_COMPONENT_DIRS, COMPONENTS, house_warnings, PROJECT_VER, sdkconfig.defaults, idf.py, Werror, esp32s3, fw_config.h, FW_FEATURE_USB_COMMAND, FW_FEATURE_UPDATER, feature switch*
+*`architecture/build-and-toolchain.md` - How the 0xF001 image is configured and compiled, including the main-less ESP-IDF build and the warning policy. - status: active - source: workspace/0xF001/CMakeLists.txt, workspace/0xF001/sdkconfig.defaults, VERSION, .clang-format - keywords: EXTRA_COMPONENT_DIRS, COMPONENTS, house_warnings, PROJECT_VER, CMAKE_CONFIGURE_DEPENDS, file(READ), sdkconfig.defaults, idf.py, Werror, esp32s3, fw_config.h, FW_FEATURE_USB_COMMAND, FW_FEATURE_UPDATER, feature switch*
 
 # Build and Toolchain
 
@@ -884,6 +884,30 @@ reads it into `PROJECT_VER`, which lands in the image header, so
 Nothing else in the repo restates the number except the README badge line and
 the changelog headings. See
 [../rule/versioning-and-release.md](../rule/versioning-and-release.md).
+
+**And CMake is told to watch it.** `file(READ)` does not register a dependency
+on what it reads, so reading `VERSION` that way is not enough on its own:
+
+```cmake
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+             "${CMAKE_CURRENT_LIST_DIR}/../../VERSION")
+```
+
+Without that line a version bump changes nothing until something else forces a
+reconfigure. The cache keeps the old `PROJECT_VER`, ninja has no reason to
+re-run cmake, and the image reports the previous number while `VERSION` reads
+the new one.
+
+**Observed on 2026-09-08, not assumed:** after `0.1.0 -> 0.1.1`, a rebuild left
+`esptool image-info` reporting `App version: 0.1.0`; deleting `CMakeCache.txt`
+and rebuilding reported `0.1.1`. CI and the release workflow never saw it,
+because a fresh checkout configures from scratch — which is what made it a
+**local-only** trap: it ships nothing wrong and costs an afternoon. The
+published `v0.1.1` image reports `0.1.1` correctly.
+
+The fix was proved by replaying the failure: with the line in place, editing
+`VERSION` alone triggers a reconfigure and the image follows, in both
+directions.
 
 ## Reproduction notes
 
@@ -4421,7 +4445,14 @@ unit".
    `release/*` → `developing` → `main`, merged rather than squashed so the
    release commit survives to be tagged.
 6. Before tagging: rebuild and confirm the version the firmware reports is the
-   one you typed. A mismatch means a copy escaped step 1.
+   one you typed. A mismatch means either a copy escaped step 1, or — the case
+   that actually happened — CMake never re-read `VERSION`. `file(READ)` does not
+   make CMake watch a file, so
+   `workspace/<pid>/CMakeLists.txt` names it in `CMAKE_CONFIGURE_DEPENDS`;
+   before that line existed, a local rebuild after a bump kept the old
+   `PROJECT_VER` and this step reported a mismatch with no hardcoded copy to
+   find. See
+   [../architecture/build-and-toolchain.md](../architecture/build-and-toolchain.md).
 7. Record the flash and RAM figures with each release and compare them with the
    previous one. `python docs/scripts/tool-esp.py size` prints both.
 8. **Verify a rollback works before shipping the update mechanism.** An update

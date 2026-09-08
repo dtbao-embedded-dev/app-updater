@@ -94,16 +94,6 @@ jobs:
           cp "$build/app_updater.elf" dist/
           cp "$build/app_updater.map" dist/
 
-          # The bootloader gets the same treatment, and it is NOT symmetry for
-          # its own sake: `espcoredump` is app-side only (BOOTLOADER_BUILD
-          # excludes it), so a fault before the app starts leaves NO core dump
-          # at all - just an address on UART0. bootloader.elf is then the only
-          # thing that can resolve it, and it is the failure that matters most,
-          # because a unit that dies here never reaches the USB command channel
-          # that would let anyone ask it anything.
-          cp "$build/bootloader/bootloader.elf" dist/
-          cp "$build/bootloader/bootloader.map" dist/
-
           # What this image was built from: the resolved config and the budget.
           #
           # From build/, NOT from the workspace: workspace/0xF001/CMakeLists.txt

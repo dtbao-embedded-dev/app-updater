@@ -128,14 +128,6 @@ below, and leaves a fresh empty `[Unreleased]` here.
   offsets from its release notes, or the factory image from the next tag.
 
 ### Added
-- **The release now publishes `bootloader.elf` and `bootloader.map`.** The app
-  already shipped both; the bootloader shipped only its `.bin`. That gap
-  matters more than the symmetry suggests: `espcoredump` is app-side only
-  (`BOOTLOADER_BUILD` excludes it), so a fault before the app starts leaves
-  **no core dump at all** - just an address on UART0 - and `bootloader.elf` is
-  the only thing that resolves it. It is also the failure that matters most,
-  because a unit that dies there never reaches the USB command channel that
-  would let anyone ask it anything.
 - **`tool-usb.py dump FILE`**, the host end of the read-out. `DUMP_INFO` for
   the size, a read loop in 4096-byte chunks, the file written **once from a
   complete transfer**, and only then `DUMP_ERASE` - so the device keeps the

@@ -7,7 +7,7 @@ status: inferred
 updated: 2026-09-08
 source: .github/workflows/ci.yml, .github/workflows/release.yml, docs/scripts/tool-release.py
 confidence: confirmed
-keywords: GitHub Actions, ci.yml, release.yml, espressif/idf:v6.1, ctest, clang-format, clang-tidy, cppcheck, gitleaks, ASan, UBSan, gh release create, SHA256SUMS, bootloader.elf, app_elf_sha256, dump-to-release index
+keywords: GitHub Actions, ci.yml, release.yml, espressif/idf:v6.1, ctest, clang-format, clang-tidy, cppcheck, gitleaks, ASan, UBSan, gh release create, SHA256SUMS, app_elf_sha256, dump-to-release index
 ---
 
 # CI and Release Pipeline
@@ -115,7 +115,7 @@ toolchain and the plain runner has the `gh` CLI.
      |-------|-------|-----|
      | Provision a blank board | `bl_<project>_<pid>_<MonDDYY>.bin` (copied by glob, and the job fails unless exactly one matches), `bootloader.bin`, `partition-table.bin`, `ota_data_initial.bin`, `flash_args` | A bench. The factory image is one `esptool` write at `0x0`; the pieces are there for a partial reflash. |
      | Update a board | `app_updater.bin` | The OTA payload the updater downloads |
-     | Diagnose one already in the field | `app_updater.elf`, `app_updater.map`, `bootloader.elf`, `bootloader.map`, `sdkconfig`, `size-report.txt` | The `.elf` is the only thing that turns a panic backtrace into line numbers, and it must be the exact one that built the `.bin`. **Which one that is, is answerable from the release alone:** ESP-IDF embeds `sha256(app_updater.elf)` in the image as `app_elf_sha256`, the same number a core dump carries and the panic handler prints, so `SHA256SUMS` doubles as the dump-to-release index. The bootloader's pair is there because `espcoredump` is app-side only — a fault before the app starts leaves no dump at all, just an address on UART0 |
+     | Diagnose one already in the field | `app_updater.elf`, `app_updater.map`, `sdkconfig`, `size-report.txt` | The `.elf` is the only thing that turns a panic backtrace into line numbers, and it must be the exact one that built the `.bin`. **Which one that is, is answerable from the release alone:** ESP-IDF embeds `sha256(app_updater.elf)` in the image as `app_elf_sha256`, the same number a core dump carries and the panic handler prints, so `SHA256SUMS` doubles as the dump-to-release index. |
 
      Plus `SHA256SUMS` over all of them.
    - **Gate:** every `.bin` named in `flash_args` must exist in `dist/`, and

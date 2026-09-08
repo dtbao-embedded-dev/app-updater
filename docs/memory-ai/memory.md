@@ -7,7 +7,7 @@
 > architecture -> data -> interface -> behavior -> rule (then adr/).
 > Confidence per doc: 🟢 confirmed | 🟡 inferred (verify) | 🔴 gap (needs a human).
 
-_Generated 2026-09-07 - 36 durable doc(s)._
+_Generated 2026-09-08 - 38 durable doc(s)._
 
 ## State (transient)
 
@@ -136,6 +136,28 @@ _Generated 2026-09-07 - 36 durable doc(s)._
   The `build/sdkconfig` trap was walked, not assumed: the edit to
   `sdkconfig.defaults` only took effect after `build/` was removed.
 
+- **A core dump can be fetched off a running unit, end to end in code.** The
+  64 KB partition at `0xFF0000`, `driver/coredump` as the only module naming
+  `esp_core_dump_*`, three opcodes in a new `0x07` range, the boot log naming
+  the panic reason, and `tool-usb.py dump FILE`. **Verified by execution at
+  every step, not by reading:** the served-opcode test was red at 10 vs 13
+  before the handlers existed, the ten new handler tests were red with `Was -7`
+  (map served, no `case`), and the host suite is **94 tests, all green**.
+  `tool-esp.py build` is clean under `-Werror`, `app_updater.bin` is `0x40df0`
+  of a `0x200000` slot (87 % free), and `.bss` is 75 504 bytes (22.09 % of
+  DRAM) including the 4096-byte `DUMP_READ` staging buffer.
+- **Three of those tests were proved to have teeth by mutation.** Reading from
+  offset 0 instead of the requested offset left two of three content assertions
+  green, because the first fill pattern repeated with period 256 and every
+  offset under test was a multiple of 256. Folding the high byte of the index
+  in turns all three red under the same mutation. A test that passes for the
+  wrong reason was found by trying, not by inspection.
+- **`DUMP_READ` could not use the dispatcher's payload buffer at all.**
+  `PAYLOAD_MAX` is 32 bytes on the stack of a task with a 4096-byte stack, so
+  the answer is staged in `command_t.chunk` and handed to the existing `*echo`
+  route — the same mechanism PING uses for the request's own bytes. That
+  constraint is why the read chunk is a flash sector and not the upgrade band.
+
 ## What's left
 
 1. **Fill the BSP board table from the 0xF001 schematic.** Its GPIO numbers are
@@ -158,10 +180,16 @@ _Generated 2026-09-07 - 36 durable doc(s)._
    [rule/layer-boundaries.md](rule/layer-boundaries.md) is enforced at review,
    which means it is enforced when someone remembers. It is the only new rule
    in the repo with no automated gate.
-9b. **Get a core dump off a unit that is not on a bench.** The dump is written
-   and survives the reboot, but the only reader today is `idf.py coredump-info`
-   over a cable. A field unit needs `esp_core_dump_image_get()` behind a USB
-   command, or `esp_core_dump_get_summary()` reported as text — neither exists.
+9b. **Archive `app_firmware`'s `.elf` when that repo ships.** The read-out path
+   exists now, but a dump is only decodable against the exact build that
+   crashed, and a crash there is the likely one — it is the product and it runs
+   almost all the time. `release.yml` here archives `app_updater.elf`; the
+   sibling repo is empty and its first release has to do the same, or a dump
+   fetched from the field is bytes with nothing to decode them against.
+9c. **Prove the core dump path on hardware.** Force a panic, let it reboot,
+   check the boot log names the reason, then `tool-usb.py dump crash.bin` and
+   `esp-coredump info_corefile --core-format raw` must print a backtrace into
+   `app.c`. Nothing before that step proves the feature — only the plumbing.
 9. Enable `gcc -fanalyzer` — deferred on purpose, not forgotten. The trigger is
    the first code that does buffer arithmetic, parsing, or allocation; see
    [rule/static-analysis.md](rule/static-analysis.md) for the exact list and the
@@ -182,10 +210,18 @@ _Generated 2026-09-07 - 36 durable doc(s)._
 - ⚠ The firmware has been **built** but never **flashed**. The partition table
   is accepted by the build and the image fits with 90% of its slot free; whether
   the layout boots on real hardware is still unknown.
-- ⚠ **No core dump has ever been written or read.** The partition and the
-  config are in place and the component is linked, but only a real panic on a
-  real board proves the write path, and only `idf.py coredump-info` against
-  that dump proves it is readable. Until then the feature is arithmetic too.
+- ⚠ **No core dump has ever been written or read.** The partition, the config,
+  the driver, the three opcodes, the boot-time report and the host subcommand
+  are all in place and all proved on the host, but only a real panic on real
+  silicon writes a dump — so nothing yet shows that `esp_partition_read` on
+  this partition returns what `espcoredump` wrote. Until that bench run the
+  whole feature is plumbing.
+- ⚠ **`DUMP_ERASE` is load-bearing and easy to forget.**
+  `CONFIG_ESP_COREDUMP_FLASH_NO_OVERWRITE` is on, so a unit whose dump is read
+  but never erased **captures no further panic for the rest of its life**.
+  `tool-usb.py dump` erases by default and `--keep` is the deliberate opt-out,
+  but a host that dies between the last `DUMP_READ` and the `DUMP_ERASE` leaves
+  the unit in exactly that state. Recoverable by running `dump` again.
 - 🔴 `spec-verify` has never been run against this repo. It will at minimum flag
   the deviations in
   [rule/known-deviations.md](rule/known-deviations.md).
@@ -243,52 +279,60 @@ _Generated 2026-09-07 - 36 durable doc(s)._
 
 ## Current focus
 
-**Middleware no longer speaks to the vendor SDK.** The change started from one
-line — `command_upgrade_begin()` calling `esp_ota_begin()` — and every other
-place with the same shape was fixed with it, because the point was never that
-one call: it was that the USB upgrade path, this product's entire bench and
-production route, was nailed to one vendor, and its 31 host tests could only
-run by shadowing vendor headers with fakes that pretended to be ESP-IDF.
+**A unit can now be asked why it died, and answer.** Seven tasks on
+`release/v0.1`, each gated on a command rather than a reading, covering the
+whole path from the panic handler to a backtrace on a laptop:
 
-What the tree looks like now:
+- A 64 KB `coredump` partition at `0xFF0000`, taken off the **tail** of
+  `app_firmware` so not one existing offset moved.
+- `driver/coredump` — four calls, no `init`/`deinit` and no instance, because
+  there is no hardware to claim and the partition is found by subtype every
+  time. That is also what lets the boot-time report run before any module is up.
+- A new `0x07` opcode range: `DUMP_INFO` / `DUMP_READ` / `DUMP_ERASE`, with
+  **no BEGIN and no END** — a read has no session to open, so a host may retry
+  any chunk in any order.
+- `report_last_panic()` at boot, logging the reason as text.
+- `tool-usb.py dump FILE`, writing the file from a complete transfer **before**
+  erasing the device.
 
-- `driver/` holds **four** modules, not two: `bsp`, `ota` (new), `storage`
-  (moved down from `middleware/`), `usb_cdc`.
-- **The SDK column of the component table is empty for every middleware
-  component but `ota_http`**, and `esp_log.h` is the only vendor header
-  middleware still includes. Both are named exceptions with written reasons.
-- `test/host/stub/` went from nine vendor stubs to five, and only one of the
-  five is there for middleware — the log sink. The rest serve
-  `driver/storage`'s own tests, which have nothing below them to fake.
-- The host suite went from 69 tests to **83, all green**, including the first
-  eleven for the blob store.
-- The rule is written down, with the two greps that check it:
-  [rule/layer-boundaries.md](rule/layer-boundaries.md).
+Three things this cost, all written down rather than absorbed:
 
-**A feature can now be compiled out.** `middleware/fw/include/fw_config.h`
-holds `FW_FEATURE_USB_COMMAND` and `FW_FEATURE_UPDATER`. Both were flipped and
-rebuilt, not reasoned about: USB off frees **67 688 bytes of `.bss`** (20.66 %
-of DRAM down to 0.85 %) and 41.4 KB of flash; updater off leaves `updater_step`
-with no address in `app_updater.map` at all.
+1. **The dispatcher's payload buffer is 32 bytes** (`PAYLOAD_MAX`, on a
+   4096-byte task stack), so `DUMP_READ` stages its answer in
+   `command_t.chunk` and uses the existing `*echo` route. 4 KB of `.bss`, and
+   the reason the read chunk is a flash sector rather than the upgrade band.
+2. **`FLASH_NO_OVERWRITE` makes the erase mandatory.** Keeping the first dump
+   is right for a boot loop, but a unit read and not erased captures nothing
+   further.
+3. **A dump is worthless without the exact `.elf`.** Archived here; not yet in
+   the sibling repo, which is where the likely crash lives.
 
-**And it has still never run on hardware.** Nothing in this change moves that,
-and the refactor makes it matter slightly more, not less: `driver/ota` is new
-code on the path that writes flash, and only a board can say whether it does.
-The next session is still a bench session, in this order:
+**And it has still never run on hardware.** The bench session is still the next
+one, and the core dump path is now one more thing that only a board can settle:
 
 1. Fill the BSP board table from the real 0xF001 schematic — still
-   placeholders, still able to drive a pin into something that does not like
-   it.
+   placeholders, still able to drive a pin into something that does not like it.
 2. Flash over **UART0** (the console moved there; USB auto-download is gone).
-3. Cable in, and look for `USB\\VID_A331&PID_F001`. If it does not appear, the
-   descriptor or the PHY switch is where to look, not the protocol.
-4. `tool-usb.py ping`, then `version`, then a real `upgrade` of an
-   `app_firmware` image, then `boot-slot 1` and `restart`, then `version` again
-   to confirm the new image is what booted. That last step is the only one that
-   proves the upgrade worked — and now it is also what proves `driver/ota`
-   works.
+3. Cable in, and look for `USB\\VID_A331&PID_F001`.
+4. `tool-usb.py ping`, `version`, a real `upgrade`, `boot-slot 1`, `restart`,
+   `version` again.
+5. **Force a panic**, let it reboot, read the boot log, then
+   `tool-usb.py dump crash.bin` and `esp-coredump info_corefile
+   --core-format raw -c crash.bin app_updater.elf`. A backtrace into `app.c` is
+   the only thing that proves any of this works.
 
 ## Recent changes
+
+- 2026-09-08 — **The core dump path, end to end in code.** Seven tasks, twelve
+  commits. `driver/coredump` (T1), the `0x07` range in the map (T2), the three
+  handlers and the 4 KB staging buffer (T3), `report_last_panic()` at boot (T4),
+  `CONFIG_ESP_COREDUMP_FLASH_NO_OVERWRITE=y` (T5), `tool-usb.py dump` (T6) and
+  the bank (T7). The host suite went from 83 tests to **94**. Two corrections
+  worth keeping: `coredump_read` was changed mid-run to bound on the **stored
+  dump length** rather than the partition, because the alternative was one
+  full-dump SHA256 per chunk; and T4's planned check — a `report_last_panic`
+  symbol in the map — was simply wrong for a `static` single-call-site function
+  under `-Os`, so what proves it shipped is its log strings in the `.bin`.
 
 - 2026-09-07 — **The board can now say why it died.** A `coredump` partition,
   64 KB at `0xFF0000`, plus `CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y`. The size
@@ -369,7 +413,7 @@ The next session is still a bench session, in this order:
   `0xA331:0xF001`, speaking the binary protocol from
   `data-monitor/data-mirror-firmware/docs/spec/usb`. `middleware/protocol`
   holds the frame codec and a 46-row opcode map; `middleware/command`
-  dispatches to ten served handlers and answers `-7` for the 36 aimed at
+  dispatches to thirteen served handlers and answers `-7` for the 36 aimed at
   hardware this board does not have; `driver/usb_cdc` owns TinyUSB, the repo's
   first managed dependency. The console moved to UART0 because the S3 has one
   internal USB PHY and TinyUSB claims it.
@@ -463,7 +507,7 @@ The next session is still a bench session, in this order:
 ## Memory
 
 ### [architecture] Repository Layout
-*`architecture/repo-layout.md` - The three-layer source tree, the shape of one module, and where build entries, scripts and hooks live. - status: active - source: application/, middleware/, driver/, workspace/0xF001/, test/host/, .github/workflows/, docs/, README.md - keywords: application, middleware, driver, bsp, usb_cdc, protocol, command, workspace, 0xF001, include, src, module directory*
+*`architecture/repo-layout.md` - The three-layer source tree, the shape of one module, and where build entries, scripts and hooks live. - status: active - source: application/, middleware/, driver/, workspace/0xF001/, test/host/, .github/workflows/, docs/, README.md - keywords: application, middleware, driver, bsp, usb_cdc, coredump, protocol, command, workspace, 0xF001, include, src, module directory*
 
 # Repository Layout
 
@@ -493,6 +537,7 @@ before anyone opens a header.
 | `driver/storage/` | One opaque blob in NVS, with a read-compare-write wear guard. Knows nothing about what is in it. |
 | `driver/bsp/` | Pin map, clock, flash geometry. The only place a pin number appears, and the only module with a per-chip port. |
 | `driver/usb_cdc/` | The CDC-ACM byte pipe on USB-OTG. Owns the TinyUSB stack. |
+| `driver/coredump/` | What the last panic left in the `coredump` partition: whether a dump is there and sound, its bytes, the panic reason as text, and the erase. The only module naming `esp_core_dump_*`. |
 | `workspace/0xF001/` | Build entry for product 0xF001: CMakeLists, sdkconfig.defaults, partitions.csv. |
 | `test/host/` | Unity runner, the host fakes for the SDK headers our logic includes, and the CMake that builds them. |
 | `.github/workflows/` | CI on every push, release on every `v*` tag. |
@@ -572,7 +617,7 @@ Toolchain is ESP-IDF 6.x targeting ESP32-S3, C11. The build entry is
 - [../rule/coding-standard-source.md](../rule/coding-standard-source.md) — where the R-XXX-nn rules come from
 
 ### [architecture] Layering and Dependencies
-*`architecture/layering-and-dependencies.md` - The call direction between layers, the component dependency graph, and why there are two separate error code spaces. - status: active - source: application/app/CMakeLists.txt, application/updater/CMakeLists.txt, middleware/*/CMakeLists.txt, driver/*/CMakeLists.txt - keywords: REQUIRES, PRIV_REQUIRES, layering, dependency direction, callback, fw_err_t, bsp_err_t, usb_cdc_err_t, ota_err_t, storage_err_t, command_busy_cb_t, cfg_store_t, cfg_load_cb_t, cfg_save_cb_t, mapped driver, from_storage_err*
+*`architecture/layering-and-dependencies.md` - The call direction between layers, the component dependency graph, and why there are two separate error code spaces. - status: active - source: application/app/CMakeLists.txt, application/updater/CMakeLists.txt, middleware/*/CMakeLists.txt, driver/*/CMakeLists.txt - keywords: REQUIRES, PRIV_REQUIRES, layering, dependency direction, callback, fw_err_t, bsp_err_t, usb_cdc_err_t, ota_err_t, storage_err_t, coredump_err_t, command_busy_cb_t, cfg_store_t, cfg_load_cb_t, cfg_save_cb_t, mapped driver, from_storage_err*
 
 # Layering and Dependencies
 
@@ -643,6 +688,7 @@ lives - `fw_crc32_le()`, which is why `esp_rom` left `protocol`, `cfg` and
 | Driver-local | `usb_cdc_err_t` | `driver/usb_cdc/` | Same reason. Mapped in `bring_up_usb()`, the one place that knows both. |
 | Driver-local | `ota_err_t` | `driver/ota/` | Same reason. Mapped where it is read: to `protocol_status_t` in `middleware/command`, and logged by name in `confirm_or_roll_back()`. |
 | Driver-local | `storage_err_t` | `driver/storage/` | Same reason. Mapped in `from_storage_err()` in `application/app/src/app.c`, which clamps anything outside the shared -1..-19 range to `FW_ERR_IO` rather than casting a code `fw_err_str()` cannot name. |
+| Driver-local | `coredump_err_t` | `driver/coredump/` | Same reason. Carries only `-1`, `-6` and `-7`: a damaged dump is not a failed call but an answer, reported through `coredump_state_t` instead, so there is no `_ERR_CORRUPT` to map. |
 | Wire | `protocol_status_t` | the USB channel | Not an internal code at all: these are bytes a PC parses, so they may never be renumbered. `middleware/command` returns them; nothing converts them to `fw_err_t` because they mean different things. |
 
 Every space shares the same meanings for the generic range `-1 .. -19`, so
@@ -1160,7 +1206,7 @@ silently losing its `manifest_url`. Resolve before the first field release.
 - [../behavior/config-load-and-save.md](../behavior/config-load-and-save.md) — the load/save algorithm
 
 ### [data] Flash Layout and Partitions
-*`data/flash-and-partitions.md` - The 16 MB partition table, why the two app slots hold two different applications, the three small data partitions, and the constraints a change must respect. - status: active - source: workspace/0xF001/partitions.csv, workspace/0xF001/sdkconfig.defaults - keywords: partitions.csv, app_updater, app_firmware, cfg_factory, cfg_setting, coredump, ota_0, ota_1, otadata, nvs, phy_init, rollback, CONFIG_ESPTOOLPY_FLASHSIZE_16MB, CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH*
+*`data/flash-and-partitions.md` - The 16 MB partition table, why the two app slots hold two different applications, the three small data partitions, and the constraints a change must respect. - status: active - source: workspace/0xF001/partitions.csv, workspace/0xF001/sdkconfig.defaults - keywords: partitions.csv, app_updater, app_firmware, cfg_factory, cfg_setting, coredump, CONFIG_ESP_COREDUMP_FLASH_NO_OVERWRITE, ota_0, ota_1, otadata, nvs, phy_init, rollback, CONFIG_ESPTOOLPY_FLASHSIZE_16MB, CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH*
 
 # Flash Layout and Partitions
 
@@ -1198,7 +1244,9 @@ Generated and re-read with ESP-IDF v6.1's own `gen_esp32part.py` against
 `app_firmware` as `14144K` ending exactly at `0xFF0000`. Built end to end:
 `idf.py build` emits `--flash-size 16MB` in its flash line, places
 `ota_data_initial.bin` at `0x15000`, and `check_sizes.py` reports
-`app_updater.bin` at `0x31100` bytes against a `0x200000` slot, 90% free.
+`app_updater.bin` at `0x40df0` bytes against a `0x200000` slot, 87% free — that
+figure is with the whole core dump feature linked in, `espcoredump` and the
+panic-reason path included.
 
 ## The two slots are two different programs
 
@@ -1275,6 +1323,23 @@ neither reaches 64 KB and they are not contiguous.
 **The failure mode if it is ever too small:** `espcoredump` logs `Not enough
 space to save core dump!` and drops the dump. Nothing else breaks — the panic
 still reboots the unit as before.
+
+### The partition holds the FIRST dump, not the last
+
+`CONFIG_ESP_COREDUMP_FLASH_NO_OVERWRITE=y`. ESP-IDF defaults the other way — a
+second panic overwrites whatever is stored — and for a unit in a boot loop that
+is exactly the wrong choice: the crash that explains the loop is the one that
+started it, and the default would keep replacing it with a symptom of itself.
+
+**The cost, accepted:** clearing the partition stops being optional.
+`esp_core_dump_flash_hw_init()` logs `Core dump already exists in flash, will
+not overwrite it with a new core dump` and refuses to write, so a unit whose
+dump is read but never erased **captures no further panic for the rest of its
+life**. That is why the read-out path erases by default
+([../behavior/usb-command-dispatch.md](../behavior/usb-command-dispatch.md),
+`DUMP_ERASE`) and why `report_last_panic()` at boot deliberately does not —
+erasing there would throw away the very first crash before anyone could fetch
+it.
 
 ## Invariants
 
@@ -2365,11 +2430,11 @@ them, and not constants of ours because ESP-IDF already publishes them per
 - [../rule/known-deviations.md](../rule/known-deviations.md) — the console move, recorded as a deviation
 
 ### [interface] USB Command Map
-*`interface/command-map.md` - Every opcode the protocol defines, which ten this build serves, and why each of the rest answers -7. - status: active - source: middleware/protocol/src/protocol.c, middleware/protocol/include/protocol.h, middleware/command/src/command.c - keywords: command map, opcode, PROTOCOL_CMD_SERVED, PROTOCOL_CMD_UNSUPPORTED, PROTOCOL_ERR_BAD_CMD, PROTOCOL_ERR_UNSUPPORTED, RESTART_APP, PING, BOOT_SLOT, VERSION, WIFI_MAC, BLE_MAC, UPG_BEGIN, UPG_WRITE, UPG_END, retired item*
+*`interface/command-map.md` - Every opcode the protocol defines, which thirteen this build serves, and why each of the rest answers -7. - status: active - source: middleware/protocol/src/protocol.c, middleware/protocol/include/protocol.h, middleware/command/src/command.c - keywords: command map, opcode, PROTOCOL_CMD_SERVED, PROTOCOL_CMD_UNSUPPORTED, PROTOCOL_ERR_BAD_CMD, PROTOCOL_ERR_UNSUPPORTED, RESTART_APP, PING, BOOT_SLOT, VERSION, WIFI_MAC, BLE_MAC, UPG_BEGIN, UPG_WRITE, UPG_END, DUMP_INFO, DUMP_READ, DUMP_ERASE, retired item*
 
 # USB Command Map
 
-> 46 opcodes are defined; **ten** are served. The other 36 exist in the table
+> 49 opcodes are defined; **thirteen** are served. The other 36 exist in the table
 > only so they can answer `-7` instead of `-2`.
 
 ## Why the unserved rows exist
@@ -2395,7 +2460,7 @@ A **retired** item stays absent on purpose. Get System `0x06` was `PRODUCT_ID`
 and is gone; a tool built against the old map gets `-2` and learns the command
 disappeared, rather than reaching whatever number took its place.
 
-## Served (ten)
+## Served (thirteen)
 
 | COMMAND | Name | REQ.DATA | RSP payload after STATUS |
 |---------|------|----------|--------------------------|
@@ -2409,6 +2474,9 @@ disappeared, rather than reaching whatever number took its place.
 | `0x0601` | UPG_BEGIN | `[target:1][img_size:4][img_crc32:4][chunk_max:4]` | — |
 | `0x0602` | UPG_WRITE | `[offset:4][chunk]` | — |
 | `0x0603` | UPG_END | — | — verifies and finalises; arms nothing |
+| `0x0701` | DUMP_INFO | — | `[state:1][rsv:3][size:4]` — `state` 0 absent, 1 valid, 2 corrupt |
+| `0x0702` | DUMP_READ | `[offset:4][len:4]`, `len` ≤ 4096 | `len` raw bytes of the stored dump |
+| `0x0703` | DUMP_ERASE | — | — succeeds even with nothing to erase |
 
 `slot` and `target` share one encoding: `0` = `app_updater` (ota_0), `1` =
 `app_firmware` (ota_1). Two encodings for one pair of slots is a bug waiting to
@@ -2416,6 +2484,29 @@ happen.
 
 Both MACs come from eFuse, which is why they are served with no radio brought up
 and no BLE stack linked — and why every ATE hardware check is not.
+
+## Core dump `0x07`, and what is deliberately missing from it
+
+The range holds **no BEGIN and no END**. A read has no session to open: every
+`DUMP_READ` carries its own `offset` and `len`, so a host may retry any chunk in
+any order and a transfer that dies half way costs nothing. Upgrade needs a
+session because it mutates a slot; this only looks.
+
+Why a new range instead of three numbers in Get System: `0x0206` is a
+**retired** opcode the map deliberately resolves as absent, so reusing it would
+make an old tool asking for PRODUCT_ID reach the dump reader instead of being
+told the command is gone.
+
+`len` is capped at `PROTOCOL_DUMP_CHUNK_MAX` (4096, one flash sector) and
+**not** at the upgrade chunk band. An image is megabytes and worth big frames; a
+dump is at most 64 KB and read once in a unit's life, so 16 round-trips cost
+nothing while a 32 KB answer would cost 32 KB of permanent `.bss` in the
+dispatcher.
+
+An absent dump is reported through `DUMP_INFO`'s `state` byte with status `0`,
+not as a failure — the same doctrine as an unset version in `VERSION`. A
+**corrupt** dump still reads: forensics is exactly when the damaged bytes
+matter. Only a read with no dump at all is refused, with `-5`.
 
 ## Unsupported, by range, with the reason
 
@@ -2439,8 +2530,14 @@ always told which half of its request to fix.
 ## Keeping this honest
 
 `middleware/command/test/test_command.c` walks the whole 16-bit opcode space and
-asserts that **exactly** the ten opcodes above report `PROTOCOL_CMD_SERVED`. An
-opcode drifting into or out of the set fails there rather than on a bench.
+asserts that **exactly** the thirteen opcodes above report
+`PROTOCOL_CMD_SERVED`. An opcode drifting into or out of the set fails there
+rather than on a bench.
+
+What that test does **not** check is that a handler exists: a map row alone
+satisfies it, and a row added without a `case` in `serve()` still passes there
+and answers `-7` at runtime through the `default:` label. The per-opcode tests
+in the same file are what prove something actually answers.
 
 ## See also
 
@@ -2450,7 +2547,7 @@ opcode drifting into or out of the set fails there rather than on a bench.
 - [../rule/known-deviations.md](../rule/known-deviations.md) — the ranges left at `-7`, as a deviation
 
 ### [interface] USB Tool CLI (tool-usb.py)
-*`interface/tool-usb-cli.md` - The command surface of the host-side USB tool and what each subcommand puts on the wire. - status: active - source: docs/scripts/tool-usb.py - keywords: tool-usb.py, selftest, ping, version, boot-slot, restart, upgrade, --arm, --chunk, --target, --bytes, --timeout, pyserial, VID PID detection*
+*`interface/tool-usb-cli.md` - The command surface of the host-side USB tool and what each subcommand puts on the wire. - status: active - source: docs/scripts/tool-usb.py - keywords: tool-usb.py, selftest, ping, version, boot-slot, restart, upgrade, dump, --arm, --chunk, --target, --bytes, --keep, --timeout, pyserial, VID PID detection, esp-coredump*
 
 # USB Tool CLI (tool-usb.py)
 
@@ -2469,6 +2566,7 @@ Invoked as `python docs/scripts/tool-usb.py <command> [argument] [flags]`.
 | `boot-slot SLOT` | `0x0101` | `SLOT` is 0 or 1. Says "armed for the next boot" and does **not** read it back, because a Get would report the old value |
 | `restart` | `0x0001` | The port re-enumerates afterwards |
 | `upgrade FILE` | `0x0601` → N × `0x0602` → `0x0603` | Prints per-chunk progress. Arms nothing unless `--arm` |
+| `dump FILE` | `0x0701` → N × `0x0702` → `0x0703` | Pulls the stored core dump to `FILE`, then erases it on the device. See below — the exit code carries information |
 
 | Flag | Applies to | Meaning |
 |------|-----------|---------|
@@ -2477,6 +2575,7 @@ Invoked as `python docs/scripts/tool-usb.py <command> [argument] [flags]`.
 | `--target` | `upgrade` | `1` `app_firmware` (default), `0` `app_updater` |
 | `--chunk` | `upgrade` | 4096..32768, multiple of 1024. Default 32768 |
 | `--arm` | `upgrade` | after a successful `UPG_END`, also send `Set BOOT_SLOT` and `RESTART_APP` |
+| `--keep` | `dump` | skip the `DUMP_ERASE`. **Not harmless** — see below |
 | `--timeout` | every command but `selftest` | seconds to wait for one response, default 5 |
 
 **A flag that does not apply is rejected, not ignored** — `selftest -p COM7`,
@@ -2499,6 +2598,52 @@ touched, for the same reason the firmware checks every `UPG_BEGIN` argument
 before it erases anything: a request that was never going to work should cost
 nothing, and a bad `--chunk` reported as a port error sends the reader looking
 in the wrong place.
+
+`dump`'s output path gets the same treatment, but only the **directory** is
+checked and nothing is created. The file is written once, at the end, from a
+complete transfer: a half-written `crash.bin` that `esp-coredump` then refuses
+is worse than no file, and creating it up front would also destroy a previous
+dump before knowing there is a new one to replace it with.
+
+## `dump`, and why its exit code matters
+
+`DUMP_INFO` first, then the read loop, then the erase:
+
+| `state` from `DUMP_INFO` | What the tool does | Exit |
+|--------------------------|--------------------|------|
+| `0` absent | Prints `no core dump stored - nothing to fetch`. Writes no file | **1** |
+| `1` valid | Reads it in `DUMP_CHUNK_MAX` (4096) chunks, writes the file, erases | 0 |
+| `2` corrupt | Warns that the checksum does not match, then **fetches it anyway** | 0 |
+
+**Absent is not an error on the device's part** — nothing has panicked — but the
+exit is still non-zero, because `dump crash.bin && esp-coredump ... crash.bin`
+must not run the second half against a file that was never written.
+
+**A corrupt dump is fetched deliberately.** It is exactly the one worth looking
+at; `esp-coredump` may still decode part of it, and a partial backtrace beats
+none. Only an *absent* dump stops the command.
+
+Order is load-bearing: the file is written **before** the erase, so the device
+keeps the only copy until the bytes are on disk. A failed write says so and
+leaves the dump in place to be fetched again.
+
+`--keep` skips the erase, and the tool says out loud what that costs, because
+`CONFIG_ESP_COREDUMP_FLASH_NO_OVERWRITE` is on
+([../data/flash-and-partitions.md](../data/flash-and-partitions.md)): a unit
+whose dump is not erased **captures no further panic** until it is. Recovery
+from an interrupted read-out is simply running `dump` again without `--keep`.
+
+On success it prints the command that turns the file into a backtrace:
+
+```
+esp-coredump info_corefile --core-format raw -c crash.bin <the .elf of the build that crashed>
+```
+
+**That `.elf` must be the exact build that crashed** — not a rebuild. Addresses
+shift with any recompile and a wrong `.elf` produces a plausible, wrong
+backtrace with no warning. The dump carries the crashing image's SHA256 for the
+tool to check against, and `release.yml` archives `app_updater.elf` for exactly
+this.
 
 ## Dependencies
 
@@ -2630,6 +2775,112 @@ from another task, with the usual caveat that the value may be stale on return.
 - [../behavior/config-load-and-save.md](../behavior/config-load-and-save.md) — the load/save algorithm end to end
 - [updater-api.md](updater-api.md) — the consumer of `check_interval_ms`, and the owner of the horizon this module restates
 
+### [interface] Core Dump API
+*`interface/coredump-api.md` - The contract driver/coredump offers for the panic record in flash — whether one is there and sound, its bytes, the panic reason as text, and the erase. - status: active - source: driver/coredump/include/coredump.h, driver/coredump/src/coredump.c, test/host/fake/coredump_fake.h - keywords: coredump_err_t, coredump_state_t, coredump_info_get, coredump_read, coredump_erase, coredump_reason_get, coredump_err_str, COREDUMP_REASON_MAX, COREDUMP_ABSENT, COREDUMP_VALID, COREDUMP_CORRUPT, esp_core_dump_image_get, esp_core_dump_image_check, esp_core_dump_get_panic_reason, coredump_fake*
+
+# Core Dump API
+
+> The only module in the repo naming `esp_core_dump_*`. Four calls: what is in the `coredump` partition, its bytes, the panic reason as text, and the erase. No lifecycle — there is nothing to initialise, because the partition is written by the panic handler before the reset and simply found afterwards.
+
+## Why it exists
+
+`espcoredump` writes an ELF core dump into the `coredump` partition from inside
+the panic handler, **before** `panic_restart()`. Every consumer of that record
+sits in `middleware/` or `application/`, and neither may name a vendor symbol
+(R-LAY-01, [../rule/layer-boundaries.md](../rule/layer-boundaries.md)). This
+driver is the mapped boundary, the same role `driver/ota` plays for `esp_ota_*`.
+
+Unusually for this repo, it has **no `init`/`deinit` pair and no instance
+struct**. There is no hardware to claim and no state to carry: the partition is
+located by subtype on every call. That also means every function is safe to
+call from the first line of `app_run()`, before any module is up — which is
+exactly where the boot-time panic report needs it.
+
+## Types
+
+| Type | Values | Meaning |
+|------|--------|---------|
+| `coredump_err_t` | `COREDUMP_OK 0`, `COREDUMP_ERR_PARAM -1`, `COREDUMP_ERR_NOT_FOUND -6`, `COREDUMP_ERR_IO -7` | Driver-local status, generic values per R-ERR-03 so a caller maps them onto `fw_err_t` or `protocol_status_t` one for one. |
+| `coredump_state_t` | `COREDUMP_ABSENT 0`, `COREDUMP_VALID 1`, `COREDUMP_CORRUPT 2` | What the partition holds. **These go on the wire unchanged** as the `state` byte of a `DUMP_INFO` response — one encoding for one fact. |
+
+`COREDUMP_REASON_MAX` is `200U`: capacity a panic-reason buffer needs, NUL
+included.
+
+**There is deliberately no `COREDUMP_ERR_CORRUPT`.** A dump that fails its
+checksum is not a failed call, it is an answer — and its bytes stay readable,
+because a dump nobody can checksum is exactly the one worth looking at. The
+distinction is carried by `coredump_state_t`, never by an error code.
+
+## Contract
+
+| Function | Returns | Notes |
+|----------|---------|-------|
+| `const char *coredump_err_str(coredump_err_t)` | a string literal, never NULL | Reentrant; unknown value yields `"COREDUMP_ERR_UNKNOWN"`. |
+| `coredump_err_t coredump_info_get(coredump_state_t *out_state, uint32_t *out_size)` | `OK`, `ERR_PARAM` on NULL, `ERR_IO` when the partition is unreachable | `OK` **includes an absent dump** — that is an answer, so a caller needs no second call to tell absence from failure. `*out_size` is the stored length with checksum included, `0` when absent. |
+| `coredump_err_t coredump_read(uint32_t offset, void *out, uint32_t len)` | `OK`, `ERR_PARAM` on NULL / zero `len` / a range past the **stored dump**, `ERR_NOT_FOUND` when nothing is stored, `ERR_IO` on a failed read | Does **not** verify the checksum, so a dump that fails it reads back fine. Bounds to the stored length, and that length comes free with the probe deciding `ERR_NOT_FOUND` — which is what lets a chunked read skip `coredump_info_get()` per chunk. |
+| `coredump_err_t coredump_erase(void)` | `OK`, `ERR_NOT_FOUND` when the table has no coredump row, `ERR_IO` on failure | `OK` **including when there was nothing to erase**, which is what makes a host's read-then-erase safe to retry after a lost reply. |
+| `coredump_err_t coredump_reason_get(char *out, size_t cap)` | `OK`, `ERR_PARAM` on NULL / zero `cap`, `ERR_NOT_FOUND` when nothing is stored or the dump carries no reason, `ERR_IO` on a failed read | Already-readable text — nothing needs symbolising to log it. `out[0]` is set to `'\0'` before anything else, so a failed call never leaves stale bytes. |
+
+Every call blocks on flash and none is callable from an ISR.
+
+## Cost of each call
+
+`coredump_info_get()` is **not** constant-time. `esp_core_dump_image_get()`
+reads only the 4-byte length field, but `esp_core_dump_image_check()` re-reads
+every stored byte to recompute the SHA256. So the cheap question — is anything
+stored — is answered cheaply, and the expensive half runs only once a dump is
+actually there. A caller reading a dump in chunks must therefore call
+`coredump_info_get()` **once** and then loop on `coredump_read()`, never call
+`info_get` per chunk.
+
+`coredump_read()` costs one `esp_partition_read` plus the 4-byte length probe
+that decides `ERR_NOT_FOUND` — and that probe is also what bounds the read, so a
+caller reading in chunks never has to ask the size itself. `coredump_erase()`
+erases every sector of the partition, so it costs a full 64 KB erase.
+
+There is one flavour of corruption whose bytes stay unreachable: a length field
+that is neither blank nor plausible. `coredump_info_get()` reports it as
+`COREDUMP_CORRUPT` with size `0`, and `coredump_read()` refuses, because nothing
+says how much of the partition was written and so no read can be bounded. A
+dump with a good length field and a bad checksum reads back normally.
+
+## Build dependency, and the refusal
+
+`driver/coredump/CMakeLists.txt` registers
+`PRIV_REQUIRES espcoredump esp_partition`; the component is found through
+`EXTRA_COMPONENT_DIRS` in `workspace/0xF001/CMakeLists.txt`, so adding the
+directory is the whole registration.
+
+Every `esp_core_dump_*` prototype this driver calls lives behind
+`#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH` in `esp_core_dump.h`. With that option
+off the errors would all read "undeclared function" and name neither the cause
+nor the fix, so `coredump.c` carries an `#error` naming the option and the file
+to edit. **There is no stub alternative:** a driver that always answered "no
+dump" would be a unit that silently never captures a panic.
+
+## Host fake
+
+`test/host/fake/coredump_fake.c` implements this contract in memory — a fake of
+**the driver**, not of the SDK, so a test drives the same contract the target
+implementation has to satisfy ([../rule/testing.md](../rule/testing.md)).
+
+Control surface: `coredump_fake_reset()`,
+`coredump_fake_set_dump(state, bytes, len)`, `coredump_fake_set_reason()`,
+`coredump_fake_fail_info/_fail_read/_fail_erase()`,
+`coredump_fake_read_count()`, `coredump_fake_erase_count()`,
+`coredump_fake_is_erased()`.
+
+`COREDUMP_FAKE_MAX` is `8192U`, deliberately larger than one `DUMP_READ` chunk,
+so a test can prove a handler reads across chunk boundaries instead of only ever
+answering the first one. `coredump_fake_read_count()` is what proves the
+chunking actually happened.
+
+## See also
+
+- [../data/flash-and-partitions.md](../data/flash-and-partitions.md) — the 64 KB `coredump` partition this reads
+- [command-map.md](command-map.md) — the three opcodes that expose it over USB
+- [../rule/layer-boundaries.md](../rule/layer-boundaries.md) — why the vendor call sits here and nowhere above
+
 ### [interface] OTA Slot API
 *`interface/ota-api.md` - The driver contract for the app slots - what each holds, which one runs, how an image is written into one, and how a fresh boot is confirmed. - status: active - source: driver/ota/include/ota.h, driver/ota/src/ota.c - keywords: ota.h, ota_err_t, ota_err_str, ota_session_t, OTA_SESSION_NONE, OTA_SLOT_COUNT, OTA_VERSION_MAX, ota_slot_size_get, ota_slot_version_get, ota_running_slot_get, ota_running_version_get, ota_boot_slot_set, ota_pending_verify_is, ota_mark_valid, ota_session_begin, ota_session_write, ota_session_end, ota_session_abort*
 
@@ -2724,7 +2975,7 @@ shadow `esp_ota_ops.h` and pretend to be ESP-IDF. See
 - [../data/flash-and-partitions.md](../data/flash-and-partitions.md) — what the two slots hold and how big they are
 
 ### [behavior] Boot and Bring-Up
-*`behavior/boot-and-bring-up.md` - What runs from app_main to the main loop, in what order, and what happens when a step fails. - status: active - source: application/app/src/app.c:64-174, application/app/src/app.c:195-210 - keywords: app_main, app_run, print_banner, APP_GIT_COMMIT, bring_up_storage, bring_up_bsp, bring_up_updater, confirm_or_roll_back, on_updater_state, now_ms, APP_TICK_MS*
+*`behavior/boot-and-bring-up.md` - What runs from app_main to the main loop, in what order, and what happens when a step fails. - status: active - source: application/app/src/app.c:130-201, application/app/src/app.c:373-395 - keywords: app_main, app_run, print_banner, APP_GIT_COMMIT, bring_up_storage, bring_up_bsp, bring_up_updater, confirm_or_roll_back, report_last_panic, coredump_info_get, coredump_reason_get, on_updater_state, now_ms, APP_TICK_MS*
 
 # Boot and Bring-Up
 
@@ -2740,19 +2991,56 @@ shadow `esp_ota_ops.h` and pretend to be ESP-IDF. See
    away. See the note below on what it duplicates.
 2. **Confirm or roll back**, before anything that could make the decision
    impossible. See below.
-3. Zero the one application context struct that owns every module's instance.
-4. Bring up **storage**: initialise NVS (erasing and retrying once if it is
+3. **Report the last panic** (`report_last_panic`): if the `coredump` partition
+   holds anything, log the panic reason as text and say how to fetch the bytes.
+   See below.
+4. Zero the one application context struct that owns every module's instance.
+5. Bring up **storage**: initialise NVS (erasing and retrying once if it is
    unusable), open the namespace, load the record. A missing or damaged record
    is not a failure — log it and use the compiled-in defaults.
-5. Bring up **bsp**: resolve board revision 0 and claim its pins. Map the
+6. Bring up **bsp**: resolve board revision 0 and claim its pins. Map the
    driver's status onto the project status.
-6. Bring up **updater**: take the check interval from the loaded record, install
+7. Bring up **updater**: take the check interval from the loaded record, install
    the state callback, init and start with the current clock.
-7. Loop forever: step the updater with `now_ms()`, log any non-OK step once,
+8. Loop forever: step the updater with `now_ms()`, log any non-OK step once,
    delay `APP_TICK_MS` (1000 ms).
 
 Each bring-up step returns early on failure with the failure logged; nothing
 starts until every module is up.
+
+## Report the last panic
+
+Third, and deliberately after the rollback decision: R-VER-08 gets the first
+word, because nothing may run before the decision that a fresh image is or is
+not confirmed. Everything else about this step is ordered for a person reading
+a boot log top-down — the banner says what is running, then the log says why the
+last run ended.
+
+It needs **no module up**. `driver/coredump` has no lifecycle at all: it finds
+the partition by subtype on every call, so this works before storage, bsp or USB
+exist ([../interface/coredump-api.md](../interface/coredump-api.md)).
+
+| Situation | What is logged |
+|-----------|----------------|
+| `coredump_info_get()` fails | Nothing. A unit whose coredump partition cannot be read has a table problem, and the boot that follows will show it |
+| No dump stored | Nothing. A "no core dump" line on every clean boot trains a reader to skip the one boot where it matters |
+| Dump stored, reason readable | `last boot ended in a panic: <reason>`, then `core dump valid|CORRUPT, <n> bytes - read it with tool-usb.py dump` |
+| Dump stored, no reason in it | The same two lines with `reason unavailable`. Still worth announcing: it tells a reader to go fetch the bytes, which is more than silence does |
+
+The reason is **already text** by the time this runs. The panic handler wrote
+the dump before `panic_restart()`, and `esp_core_dump_get_panic_reason()` returns
+a string, so nothing here has to symbolise an address — that is what makes this
+a one-call step rather than a host-tool problem.
+
+**It does not erase what it read.** The dump stays for `DUMP_READ` to fetch, and
+with `CONFIG_ESP_COREDUMP_FLASH_NO_OVERWRITE` on, erasing here would throw away
+the first crash of a boot loop — which is the one that explains it.
+
+`report_last_panic` is `static` with a single call site, so under `-Os` it is
+inlined and carries **no symbol in `app_updater.map`**. What proves it shipped is
+its two log format strings in `app_updater.bin` plus the references to
+`esp_core_dump_get_panic_reason` in the map; a map-symbol grep is the wrong check
+for a static function, and only works for cross-unit ones like `cfg_init`.
 
 ## The banner overlaps ESP-IDF's own
 
@@ -3252,7 +3540,7 @@ eight, which is why the floor exists rather than allowing smaller.
 - [../interface/tool-usb-cli.md](../interface/tool-usb-cli.md) — the script that automates this
 
 ### [behavior] USB Command Dispatch
-*`behavior/usb-command-dispatch.md` - The order the dispatcher decides things in, and what each served handler does. - status: active - source: middleware/command/src/command.c, middleware/command/include/command.h, middleware/command/test/test_command.c - keywords: command_on_frame, command_init, command_deinit, serve, handle_restart_app, handle_set_boot_slot, handle_get_version, handle_get_boot_slot, handle_get_mac, command_reply_cb_t, command_busy_cb_t, COMMAND_RESTART_GRACE_MS*
+*`behavior/usb-command-dispatch.md` - The order the dispatcher decides things in, and what each served handler does. - status: active - source: middleware/command/src/command.c, middleware/command/src/command_dump.c, middleware/command/src/command_priv.h, middleware/command/include/command.h, middleware/command/test/test_command.c - keywords: command_on_frame, command_init, command_deinit, serve, handle_restart_app, handle_set_boot_slot, handle_get_version, handle_get_boot_slot, handle_get_mac, command_dump_info, command_dump_read, command_dump_erase, PAYLOAD_MAX, echo, PROTOCOL_DUMP_CHUNK_MAX, command_reply_cb_t, command_busy_cb_t, COMMAND_RESTART_GRACE_MS*
 
 # USB Command Dispatch
 
@@ -3301,14 +3589,16 @@ layer above it (R-LAY-01). The same pattern `ota_http` uses to report progress
 upward without knowing who it notifies.
 
 `command_t` carries the response frame buffer — the second of the channel's two
-`PROTOCOL_MAX_FRAME` buffers — and the upgrade session. A response body is built
-straight into that frame rather than into a third buffer.
+`PROTOCOL_MAX_FRAME` buffers — the upgrade session, and one 4096-byte staging
+buffer for `DUMP_READ`. A response body is built straight into the frame rather
+than into a third buffer; the staging buffer exists for the one answer too big
+to pass through the small payload buffer at all (see below).
 
 ## Dispatch
 
-One **flat switch** over the ten served opcodes, not the two-level
-range-then-item switch the source spec describes. At ten cases the extra level
-is ceremony: the compiler builds the same jump table either way, and a reader
+One **flat switch** over the thirteen served opcodes, not the two-level
+range-then-item switch the source spec describes. At thirteen cases the extra
+level is ceremony: the compiler builds the same jump table either way, and a reader
 looking up `0x0202` finds it in one place. The `default:` label logs and answers
 `-7`, and is unreachable — the map already said the opcode is served, so
 reaching it means a row was added without a case.
@@ -3324,6 +3614,9 @@ reaching it means a row was added without a case.
 | `0x0202` Get BOOT_SLOT | Maps the running partition's subtype to the wire encoding. Neither OTA slot is `-6`, which no `partitions.csv` in this repo can produce |
 | `0x0203`/`0x0204` | `bsp_mac_get()` for `BSP_MAC_WIFI` / `BSP_MAC_BLE`; a failure is `-6` |
 | `0x0601`/`0x0602`/`0x0603` | Routed to [usb-upgrade-session.md](usb-upgrade-session.md) |
+| `0x0701` DUMP_INFO | `coredump_info_get()` into `[state:1][rsv:3][size:4]`. An **absent** dump is `state 0` with status `0` — an answer, not a failure, the same doctrine as an unset version above. A driver failure is `-6` |
+| `0x0702` DUMP_READ | `coredump_read(offset, cmd->chunk, len)`, then points `echo` at `cmd->chunk`. `len` of zero or over `PROTOCOL_DUMP_CHUNK_MAX` is `-4`, a range past the stored dump is `-4`, no dump at all is `-5`, flash refusing is `-6`. A dump failing its checksum **still reads** |
+| `0x0703` DUMP_ERASE | `coredump_erase()`. Succeeds even with nothing to erase, so a host's read-then-erase is safe to retry after a lost reply; `-6` on failure |
 
 **Set and Get BOOT_SLOT are asymmetric on purpose.** Set writes `otadata` for
 the next boot; Get reports what is running now. A Set followed by a Get reads
@@ -3332,6 +3625,33 @@ restart" rather than read it back.
 
 `command_deinit()` aborts an open transfer rather than finalising it: a slot
 half written is a slot nothing should boot.
+
+## The one answer too big for the payload buffer
+
+`PAYLOAD_MAX` is 32 bytes — `PROTOCOL_VERSION_LEN`, the widest reply any of the
+small handlers produces — and it is a **stack** array in `command_on_frame()`,
+inside a task whose stack is 4096 (`APP_USB_TASK_STACK`). So a 4 KB `DUMP_READ`
+answer cannot go through it, and enlarging it would overflow the task stack
+rather than fix anything.
+
+The route that already existed is `echo`: a handler sets `*echo` to bytes it
+does not own, and `reply()` copies once from there straight into `cmd->frame`.
+PING points it at the parser's own buffer. That buffer is only valid until the
+next `protocol_parser_feed()`, so `DUMP_READ` cannot borrow it — it needs a home
+that outlives `serve()`, which is why `command_t` carries `chunk`.
+
+**That is also why the read chunk is a flash sector and not the upgrade band.**
+`PROTOCOL_DUMP_CHUNK_MAX` at 4096 costs 4096 bytes of `.bss` for a 64 KB dump
+read once in a unit's life; the 32768 of `PROTOCOL_UPG_CHUNK_CAP` would cost
+eight times that to save fourteen round-trips. Measured: `.bss` is 75 504 bytes,
+22.09 % of DRAM, and the buffer is 4096 of it.
+
+**The tests were proved to have teeth by mutation, not assumed.** Reading from
+offset 0 instead of the requested offset left two of the three content
+assertions green, because the first fill pattern repeated with period 256 and
+every offset under test was a multiple of 256. The pattern now folds in the
+high byte of the index, and the same mutation turns all three red.
+
 
 ## The RESTART_APP ordering, and how it is proven
 
@@ -3491,6 +3811,169 @@ refusing a transfer is recoverable, two writers on one slot is not.
 - [update-cycle-fsm.md](update-cycle-fsm.md) — the other writer
 - [../data/flash-and-partitions.md](../data/flash-and-partitions.md) — the two slots
 
+### [behavior] Core Dump Capture and Read-Out
+*`behavior/coredump-capture-and-readout.md` - When a panic actually produces a core dump and when it does not, what the stored bytes are, how they leave the unit over USB, and why the .elf that decodes them must be the exact build that crashed. - status: active - source: driver/coredump/src/coredump.c, middleware/command/src/command_dump.c, application/app/src/app.c:373-395, docs/scripts/tool-usb.py, workspace/0xF001/sdkconfig.defaults - keywords: core dump, panic, esp_core_dump_write, panic_restart, PANIC_EXCEPTION, DUMP_INFO, DUMP_READ, DUMP_ERASE, report_last_panic, tool-usb.py dump, esp-coredump, info_corefile, core-format raw, app_elf_sha256, FLASH_NO_OVERWRITE, s_dumping_core*
+
+# Core Dump Capture and Read-Out
+
+> The dump is written **before** the reset, not after it, and only by a panic that reaches the panic handler. By the time USB is up again the record is already in flash, so getting it out is an ordinary read-back problem — not a crash-time one.
+
+## The order, which is the opposite of the obvious guess
+
+`esp_system/panic.c` runs, in this order:
+
+1. Print the panic message and `ELF file SHA256:` to the console (UART0 here).
+2. **`esp_core_dump_write(info)`** — the dump is written to flash, with the
+   watchdogs fed around it.
+3. Set the reset-reason hint (`ESP_RST_PANIC`, `ESP_RST_INT_WDT`,
+   `ESP_RST_TASK_WDT`).
+4. `panic_restart()`.
+
+So the sequence is **write, then reset** — not "reset, then save". Everything
+about the design follows from that: nothing has to survive a reboot in RAM, and
+nothing has to be transmitted while the chip is dying.
+
+## Which resets produce a dump, and which do not
+
+Only a reset that reaches the panic handler writes anything.
+
+| Produces a dump | Produces nothing |
+|-----------------|------------------|
+| CPU exceptions — `LoadProhibited`, `StoreProhibited`, `IllegalInstruction` | Brownout, or the supply simply going away |
+| `abort()`, and a failed `assert` (asserts ship enabled, R-BLD-03) | The EN pin / reset button |
+| Interrupt watchdog (`PANIC_EXCEPTION_IWDT`) | An RTC watchdog reset that bypasses the panic handler |
+| Task watchdog (`PANIC_EXCEPTION_TWDT`) | A hang no watchdog catches |
+
+For everything in the right-hand column the partition stays blank and
+`coredump_info_get()` answers `COREDUMP_ABSENT`. **That is an answer, not a
+failure** — it says the unit did not panic, which is worth knowing.
+
+One more way to get nothing: if the dump-writing code itself faults, the
+`s_dumping_core` re-entry guard prints `Re-entered core dump! Exception happened
+during core dump!` and no dump is stored at all.
+
+## What the stored bytes are
+
+Not a hex log — a **binary ELF core file**, in three parts:
+
+| Part | Content |
+|------|---------|
+| 12 B header | `core_dump_header_t { data_len, version, chip_rev }` |
+| body | A subset of ELF: `PT_LOAD` segments holding each task's TCB and stack, `PT_NOTE` / `NT_PRSTATUS` holding the register sets |
+| 32 B trailer | SHA256 checksum |
+
+Nothing in it is human-readable except task names (`char exc_task[16]`), so it
+has to go through a tool. There is no format or checksum knob in ESP-IDF v6.1 —
+ELF and SHA256 are what gets compiled in.
+
+## Two ways out, and what each is for
+
+### On the device, at boot: the reason as text
+
+`report_last_panic()` logs the panic reason on the next boot
+([boot-and-bring-up.md](boot-and-bring-up.md) step 3).
+`esp_core_dump_get_panic_reason()` returns a **string**, so this needs no tool,
+no host and no symbolisation. It answers "why did this unit reboot" and nothing
+more — no backtrace, no line numbers.
+
+### Over USB, after the reboot: the whole thing
+
+Three opcodes, no session
+([../interface/command-map.md](../interface/command-map.md)):
+
+1. `DUMP_INFO` `0x0701` → `state` and `size`.
+2. `DUMP_READ` `0x0702` → 4096 bytes at a time, `offset` and `len` in every
+   request, so any chunk may be retried in any order.
+3. `DUMP_ERASE` `0x0703` → after the host has the bytes on disk.
+
+`tool-usb.py dump crash.bin` drives all three
+([../interface/tool-usb-cli.md](../interface/tool-usb-cli.md)). The file is
+written from a complete transfer **before** the erase, so the device holds the
+only copy until the bytes are safe.
+
+**Why the read-out is raw and the parsing is on the host.** `esp_core_dump_get_summary()`
+would give `exc_pc` plus sixteen raw PC values — which still need `addr2line`
+and the matching `.elf` to become file and line, so parsing on the device costs
+code and gains nothing. Worse, it loses: the raw dump already carries the
+crashing image's `app_elf_sha256`, which is what tells a reader **which of the
+two apps** crashed, since `app_updater` and `app_firmware` share this one
+partition. Ship the bytes, keep everything.
+
+## Why there is no crash-time USB path
+
+`esp_system/panic.c` has exactly three character-output functions:
+`panic_print_char_uart` (a polling loop into the TX FIFO),
+`panic_print_char_usb_cdc` (the ROM CDC driver) and
+`panic_print_char_usb_serial_jtag`. **TinyUSB is not among them and cannot be:**
+a panic runs with interrupts off and no scheduler, so the TinyUSB task and its
+endpoint servicing never run. All three supported paths are direct register
+polling for that reason.
+
+The one USB path that does work in a panic is the ROM CDC console
+(`CONFIG_ESP_CONSOLE_USB_CDC`, component `esp_usb_cdc_rom_console`), and it
+drives `USB0` directly with its own `esp_intr_alloc(ETS_USB_INTR_SOURCE)` —
+the same USB-OTG controller TinyUSB holds for the command channel. Two stacks,
+one controller: mutually exclusive. Enabling it would also mean
+`ENABLE_TO_UART`, giving up the flash partition entirely.
+
+None of this matters, because the dump is already in flash before the reset.
+The flash partition is what turns a crash-time problem into a read-back one.
+
+## Decoding it, and the one thing that makes a dump worthless
+
+```
+esp-coredump info_corefile --core-format raw -c crash.bin <prog>.elf
+```
+
+`--core-format` accepts `auto | b64 | elf | raw`; a raw flash image is `raw`.
+On a bench with the chip in download mode, `idf.py coredump-info -p COM7` does
+the read and the parse in one step and needs no firmware support at all — which
+is why the USB path only earns its place for a unit that cannot be put into
+download mode.
+
+**The `.elf` must be the exact build that crashed.** Not "an `.elf` of
+`app_firmware`" — the one that produced the running image. One recompile shifts
+every address, and a wrong `.elf` yields a plausible, wrong backtrace **with no
+error**. That is the failure mode to fear here, not a missing file.
+
+The dump carries `app_elf_sha256` so the tool can tell you, and `release.yml`
+archives `app_updater.elf` with its `.map` and `sdkconfig` for exactly this
+reason.
+
+🔴 **Gap: `app_firmware` has no such archive yet.** The sibling repo is empty,
+and a crash there is the likely one — it is the product and it runs almost all
+the time. If its release does not archive its `.elf` the same way, a dump
+fetched from the field will be bytes with nothing to decode them against.
+
+## Keeping the first dump, not the last
+
+`CONFIG_ESP_COREDUMP_FLASH_NO_OVERWRITE=y`
+([../data/flash-and-partitions.md](../data/flash-and-partitions.md)). In a boot
+loop the crash that explains the loop is the one that started it, so a second
+panic must not overwrite it.
+
+The consequence runs through the whole feature: `DUMP_ERASE` is load-bearing,
+`tool-usb.py dump` erases by default, and `report_last_panic()` deliberately
+does **not** — erasing at boot would destroy the first crash before anyone
+could fetch it.
+
+## What none of this proves
+
+⚠ **No core dump has ever been written or read on hardware.** The host suite
+proves the frame codec, the status mapping and the chunk arithmetic; it cannot
+prove that `esp_partition_read` on this partition returns what `espcoredump`
+wrote, because only a real panic on real silicon writes it. The bench sequence
+that would settle it: force a panic, let it reboot, check the boot log names the
+reason, then `tool-usb.py dump crash.bin -p COM7` and `esp-coredump` against
+`app_updater.elf` must print a backtrace into `app.c`.
+
+## See also
+
+- [../interface/coredump-api.md](../interface/coredump-api.md) — the driver contract, and what each call costs
+- [../interface/command-map.md](../interface/command-map.md) — the `0x07` range on the wire
+- [usb-command-dispatch.md](usb-command-dispatch.md) — how a 4 KB answer leaves a dispatcher whose payload buffer is 32 bytes
+- [boot-and-bring-up.md](boot-and-bring-up.md) — where the boot-time report sits in the sequence
+
 ### [rule] Where the R-XXX-nn Rules Come From
 *`rule/coding-standard-source.md` - How to resolve a rule ID cited in this repo's comments, and what outranks what. - status: active - source: conversation, E:/Baotd/docs/embedded-spec - keywords: R-RPO, R-LAY, R-ERR, R-LFC, R-CFG, R-BLD, R-VER, R-FMT, embedded-spec, emb-dtbao, spec_doc, spec-verify*
 
@@ -3605,7 +4088,7 @@ hook can never disagree.
 - [coding-standard-source.md](coding-standard-source.md) — the standard behind these values
 
 ### [rule] Testing
-*`rule/testing.md` - Where a test lives, how to run it without a board, and how to tell a test that passes from a test that works. - status: active - source: test/host/CMakeLists.txt, test/host/runner.c, test/host/stub/esp_log.h, middleware/fw/test/test_fw.c, application/updater/test/test_updater.c, .github/workflows/ci.yml - keywords: Unity, ctest, test/host, runner.c, UNITY_DIR, host_tests, esp_log stub, mutation, fake, stub, ota_fake, bsp_fake, nvs_fake, driver fake, 83 tests*
+*`rule/testing.md` - Where a test lives, how to run it without a board, and how to tell a test that passes from a test that works. - status: active - source: test/host/CMakeLists.txt, test/host/runner.c, test/host/stub/esp_log.h, middleware/fw/test/test_fw.c, application/updater/test/test_updater.c, .github/workflows/ci.yml - keywords: Unity, ctest, test/host, runner.c, UNITY_DIR, host_tests, esp_log stub, mutation, fake, stub, ota_fake, bsp_fake, nvs_fake, coredump_fake, driver fake, 83 tests*
 
 # Testing
 
@@ -3699,7 +4182,7 @@ the last gate before a release tag, and it does not exist.
 
 | Directory | Holds | Contents today |
 |-----------|-------|----------------|
-| `fake/` | Host implementations of **our own** driver headers | `ota_fake.c`, `bsp_fake.c`, `nvs_fake.c` |
+| `fake/` | Host implementations of **our own** driver headers | `ota_fake.c`, `bsp_fake.c`, `nvs_fake.c`, `coredump_fake.c` |
 | `stub/` | Shadows of **vendor** headers, first on the include path | `esp_log.h`, `esp_rom_crc.h`, `esp_err.h`, `nvs.h`, `nvs_flash.h` |
 
 A test of middleware belongs in the first column. Before `driver/ota` and
@@ -4144,8 +4627,9 @@ keeps an independent CRC-32 reference under `test/host/stub/esp_rom_crc.h` for
 grep -rn '#include "esp_\|#include "nvs\|#include "freertos/\|#include "soc/\|#include "driver/' \
      middleware/*/src middleware/*/include | grep -v 'esp_log.h' | grep -v 'ota_http'
 
-# The specific APIs that used to be called directly.
-grep -rn 'esp_ota_\|esp_partition_\|nvs_\|esp_restart\|esp_read_mac\|esp_rom' \
+# The specific APIs that used to be called directly, plus the ones a mapped
+# driver now owns and nothing above it may reach for.
+grep -rn 'esp_ota_\|esp_partition_\|esp_core_dump_\|nvs_\|esp_restart\|esp_read_mac\|esp_rom' \
      middleware/*/src middleware/*/include application/*/src application/*/include
 ```
 

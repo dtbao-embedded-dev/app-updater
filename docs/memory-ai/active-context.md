@@ -1,6 +1,6 @@
 ---
 title: Active Context
-updated: 2026-09-07
+updated: 2026-09-08
 ---
 
 # Active Context
@@ -9,52 +9,60 @@ updated: 2026-09-07
 
 ## Current focus
 
-**Middleware no longer speaks to the vendor SDK.** The change started from one
-line — `command_upgrade_begin()` calling `esp_ota_begin()` — and every other
-place with the same shape was fixed with it, because the point was never that
-one call: it was that the USB upgrade path, this product's entire bench and
-production route, was nailed to one vendor, and its 31 host tests could only
-run by shadowing vendor headers with fakes that pretended to be ESP-IDF.
+**A unit can now be asked why it died, and answer.** Seven tasks on
+`release/v0.1`, each gated on a command rather than a reading, covering the
+whole path from the panic handler to a backtrace on a laptop:
 
-What the tree looks like now:
+- A 64 KB `coredump` partition at `0xFF0000`, taken off the **tail** of
+  `app_firmware` so not one existing offset moved.
+- `driver/coredump` — four calls, no `init`/`deinit` and no instance, because
+  there is no hardware to claim and the partition is found by subtype every
+  time. That is also what lets the boot-time report run before any module is up.
+- A new `0x07` opcode range: `DUMP_INFO` / `DUMP_READ` / `DUMP_ERASE`, with
+  **no BEGIN and no END** — a read has no session to open, so a host may retry
+  any chunk in any order.
+- `report_last_panic()` at boot, logging the reason as text.
+- `tool-usb.py dump FILE`, writing the file from a complete transfer **before**
+  erasing the device.
 
-- `driver/` holds **four** modules, not two: `bsp`, `ota` (new), `storage`
-  (moved down from `middleware/`), `usb_cdc`.
-- **The SDK column of the component table is empty for every middleware
-  component but `ota_http`**, and `esp_log.h` is the only vendor header
-  middleware still includes. Both are named exceptions with written reasons.
-- `test/host/stub/` went from nine vendor stubs to five, and only one of the
-  five is there for middleware — the log sink. The rest serve
-  `driver/storage`'s own tests, which have nothing below them to fake.
-- The host suite went from 69 tests to **83, all green**, including the first
-  eleven for the blob store.
-- The rule is written down, with the two greps that check it:
-  [rule/layer-boundaries.md](rule/layer-boundaries.md).
+Three things this cost, all written down rather than absorbed:
 
-**A feature can now be compiled out.** `middleware/fw/include/fw_config.h`
-holds `FW_FEATURE_USB_COMMAND` and `FW_FEATURE_UPDATER`. Both were flipped and
-rebuilt, not reasoned about: USB off frees **67 688 bytes of `.bss`** (20.66 %
-of DRAM down to 0.85 %) and 41.4 KB of flash; updater off leaves `updater_step`
-with no address in `app_updater.map` at all.
+1. **The dispatcher's payload buffer is 32 bytes** (`PAYLOAD_MAX`, on a
+   4096-byte task stack), so `DUMP_READ` stages its answer in
+   `command_t.chunk` and uses the existing `*echo` route. 4 KB of `.bss`, and
+   the reason the read chunk is a flash sector rather than the upgrade band.
+2. **`FLASH_NO_OVERWRITE` makes the erase mandatory.** Keeping the first dump
+   is right for a boot loop, but a unit read and not erased captures nothing
+   further.
+3. **A dump is worthless without the exact `.elf`.** Archived here; not yet in
+   the sibling repo, which is where the likely crash lives.
 
-**And it has still never run on hardware.** Nothing in this change moves that,
-and the refactor makes it matter slightly more, not less: `driver/ota` is new
-code on the path that writes flash, and only a board can say whether it does.
-The next session is still a bench session, in this order:
+**And it has still never run on hardware.** The bench session is still the next
+one, and the core dump path is now one more thing that only a board can settle:
 
 1. Fill the BSP board table from the real 0xF001 schematic — still
-   placeholders, still able to drive a pin into something that does not like
-   it.
+   placeholders, still able to drive a pin into something that does not like it.
 2. Flash over **UART0** (the console moved there; USB auto-download is gone).
-3. Cable in, and look for `USB\\VID_A331&PID_F001`. If it does not appear, the
-   descriptor or the PHY switch is where to look, not the protocol.
-4. `tool-usb.py ping`, then `version`, then a real `upgrade` of an
-   `app_firmware` image, then `boot-slot 1` and `restart`, then `version` again
-   to confirm the new image is what booted. That last step is the only one that
-   proves the upgrade worked — and now it is also what proves `driver/ota`
-   works.
+3. Cable in, and look for `USB\\VID_A331&PID_F001`.
+4. `tool-usb.py ping`, `version`, a real `upgrade`, `boot-slot 1`, `restart`,
+   `version` again.
+5. **Force a panic**, let it reboot, read the boot log, then
+   `tool-usb.py dump crash.bin` and `esp-coredump info_corefile
+   --core-format raw -c crash.bin app_updater.elf`. A backtrace into `app.c` is
+   the only thing that proves any of this works.
 
 ## Recent changes
+
+- 2026-09-08 — **The core dump path, end to end in code.** Seven tasks, twelve
+  commits. `driver/coredump` (T1), the `0x07` range in the map (T2), the three
+  handlers and the 4 KB staging buffer (T3), `report_last_panic()` at boot (T4),
+  `CONFIG_ESP_COREDUMP_FLASH_NO_OVERWRITE=y` (T5), `tool-usb.py dump` (T6) and
+  the bank (T7). The host suite went from 83 tests to **94**. Two corrections
+  worth keeping: `coredump_read` was changed mid-run to bound on the **stored
+  dump length** rather than the partition, because the alternative was one
+  full-dump SHA256 per chunk; and T4's planned check — a `report_last_panic`
+  symbol in the map — was simply wrong for a `static` single-call-site function
+  under `-Os`, so what proves it shipped is its log strings in the `.bin`.
 
 - 2026-09-07 — **The board can now say why it died.** A `coredump` partition,
   64 KB at `0xFF0000`, plus `CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y`. The size
@@ -135,7 +143,7 @@ The next session is still a bench session, in this order:
   `0xA331:0xF001`, speaking the binary protocol from
   `data-monitor/data-mirror-firmware/docs/spec/usb`. `middleware/protocol`
   holds the frame codec and a 46-row opcode map; `middleware/command`
-  dispatches to ten served handlers and answers `-7` for the 36 aimed at
+  dispatches to thirteen served handlers and answers `-7` for the 36 aimed at
   hardware this board does not have; `driver/usb_cdc` owns TinyUSB, the repo's
   first managed dependency. The console moved to UART0 because the S3 has one
   internal USB PHY and TinyUSB claims it.

@@ -1,6 +1,6 @@
 ---
 title: Progress
-updated: 2026-09-07
+updated: 2026-09-08
 ---
 
 # Progress
@@ -126,6 +126,28 @@ updated: 2026-09-07
   The `build/sdkconfig` trap was walked, not assumed: the edit to
   `sdkconfig.defaults` only took effect after `build/` was removed.
 
+- **A core dump can be fetched off a running unit, end to end in code.** The
+  64 KB partition at `0xFF0000`, `driver/coredump` as the only module naming
+  `esp_core_dump_*`, three opcodes in a new `0x07` range, the boot log naming
+  the panic reason, and `tool-usb.py dump FILE`. **Verified by execution at
+  every step, not by reading:** the served-opcode test was red at 10 vs 13
+  before the handlers existed, the ten new handler tests were red with `Was -7`
+  (map served, no `case`), and the host suite is **94 tests, all green**.
+  `tool-esp.py build` is clean under `-Werror`, `app_updater.bin` is `0x40df0`
+  of a `0x200000` slot (87 % free), and `.bss` is 75 504 bytes (22.09 % of
+  DRAM) including the 4096-byte `DUMP_READ` staging buffer.
+- **Three of those tests were proved to have teeth by mutation.** Reading from
+  offset 0 instead of the requested offset left two of three content assertions
+  green, because the first fill pattern repeated with period 256 and every
+  offset under test was a multiple of 256. Folding the high byte of the index
+  in turns all three red under the same mutation. A test that passes for the
+  wrong reason was found by trying, not by inspection.
+- **`DUMP_READ` could not use the dispatcher's payload buffer at all.**
+  `PAYLOAD_MAX` is 32 bytes on the stack of a task with a 4096-byte stack, so
+  the answer is staged in `command_t.chunk` and handed to the existing `*echo`
+  route — the same mechanism PING uses for the request's own bytes. That
+  constraint is why the read chunk is a flash sector and not the upgrade band.
+
 ## What's left
 
 1. **Fill the BSP board table from the 0xF001 schematic.** Its GPIO numbers are
@@ -148,10 +170,16 @@ updated: 2026-09-07
    [rule/layer-boundaries.md](rule/layer-boundaries.md) is enforced at review,
    which means it is enforced when someone remembers. It is the only new rule
    in the repo with no automated gate.
-9b. **Get a core dump off a unit that is not on a bench.** The dump is written
-   and survives the reboot, but the only reader today is `idf.py coredump-info`
-   over a cable. A field unit needs `esp_core_dump_image_get()` behind a USB
-   command, or `esp_core_dump_get_summary()` reported as text — neither exists.
+9b. **Archive `app_firmware`'s `.elf` when that repo ships.** The read-out path
+   exists now, but a dump is only decodable against the exact build that
+   crashed, and a crash there is the likely one — it is the product and it runs
+   almost all the time. `release.yml` here archives `app_updater.elf`; the
+   sibling repo is empty and its first release has to do the same, or a dump
+   fetched from the field is bytes with nothing to decode them against.
+9c. **Prove the core dump path on hardware.** Force a panic, let it reboot,
+   check the boot log names the reason, then `tool-usb.py dump crash.bin` and
+   `esp-coredump info_corefile --core-format raw` must print a backtrace into
+   `app.c`. Nothing before that step proves the feature — only the plumbing.
 9. Enable `gcc -fanalyzer` — deferred on purpose, not forgotten. The trigger is
    the first code that does buffer arithmetic, parsing, or allocation; see
    [rule/static-analysis.md](rule/static-analysis.md) for the exact list and the
@@ -172,10 +200,18 @@ updated: 2026-09-07
 - ⚠ The firmware has been **built** but never **flashed**. The partition table
   is accepted by the build and the image fits with 90% of its slot free; whether
   the layout boots on real hardware is still unknown.
-- ⚠ **No core dump has ever been written or read.** The partition and the
-  config are in place and the component is linked, but only a real panic on a
-  real board proves the write path, and only `idf.py coredump-info` against
-  that dump proves it is readable. Until then the feature is arithmetic too.
+- ⚠ **No core dump has ever been written or read.** The partition, the config,
+  the driver, the three opcodes, the boot-time report and the host subcommand
+  are all in place and all proved on the host, but only a real panic on real
+  silicon writes a dump — so nothing yet shows that `esp_partition_read` on
+  this partition returns what `espcoredump` wrote. Until that bench run the
+  whole feature is plumbing.
+- ⚠ **`DUMP_ERASE` is load-bearing and easy to forget.**
+  `CONFIG_ESP_COREDUMP_FLASH_NO_OVERWRITE` is on, so a unit whose dump is read
+  but never erased **captures no further panic for the rest of its life**.
+  `tool-usb.py dump` erases by default and `--keep` is the deliberate opt-out,
+  but a host that dies between the last `DUMP_READ` and the `DUMP_ERASE` leaves
+  the unit in exactly that state. Recoverable by running `dump` again.
 - 🔴 `spec-verify` has never been run against this repo. It will at minimum flag
   the deviations in
   [rule/known-deviations.md](rule/known-deviations.md).

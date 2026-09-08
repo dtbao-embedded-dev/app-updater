@@ -30,6 +30,20 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # partitions.csv before turning it on.
 CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
 
+# Keep the FIRST dump, not the last. ESP-IDF defaults the other way: a second
+# panic overwrites whatever was in the partition. For a unit in a boot loop
+# that is exactly the wrong choice - the crash that explains the loop is the
+# one that started it, and the default would replace it with a symptom of
+# itself, over and over, until someone finally reads the tenth copy.
+#
+# THE COST, ACCEPTED: DUMP_ERASE stops being optional. Once a dump is stored,
+# espcoredump refuses to write another until the partition is cleared, so a
+# unit whose dump is read but never erased captures no further panic for the
+# rest of its life. `tool-usb.py dump` therefore erases by default and `--keep`
+# is the deliberate opt-out; recovery from a half-finished read-out is simply
+# running the command again without it.
+CONFIG_ESP_COREDUMP_FLASH_NO_OVERWRITE=y
+
 # 240 MHz, the part's maximum, rather than the 160 MHz ESP-IDF defaults to.
 # An OTA fetch is TLS over Wi-Fi and the CPU is what pays for it; a download
 # that runs longer is a download with more chances to be interrupted. The

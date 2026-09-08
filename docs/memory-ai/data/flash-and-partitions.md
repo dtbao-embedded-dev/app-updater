@@ -4,10 +4,10 @@ category: data
 order: 3
 purpose: The 16 MB partition table, why the two app slots hold two different applications, the three small data partitions, and the constraints a change must respect.
 status: active
-updated: 2026-09-07
+updated: 2026-09-08
 source: workspace/0xF001/partitions.csv, workspace/0xF001/sdkconfig.defaults
 confidence: confirmed
-keywords: partitions.csv, app_updater, app_firmware, cfg_factory, cfg_setting, coredump, ota_0, ota_1, otadata, nvs, phy_init, rollback, CONFIG_ESPTOOLPY_FLASHSIZE_16MB, CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
+keywords: partitions.csv, app_updater, app_firmware, cfg_factory, cfg_setting, coredump, CONFIG_ESP_COREDUMP_FLASH_NO_OVERWRITE, ota_0, ota_1, otadata, nvs, phy_init, rollback, CONFIG_ESPTOOLPY_FLASHSIZE_16MB, CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
 ---
 
 # Flash Layout and Partitions
@@ -46,7 +46,9 @@ Generated and re-read with ESP-IDF v6.1's own `gen_esp32part.py` against
 `app_firmware` as `14144K` ending exactly at `0xFF0000`. Built end to end:
 `idf.py build` emits `--flash-size 16MB` in its flash line, places
 `ota_data_initial.bin` at `0x15000`, and `check_sizes.py` reports
-`app_updater.bin` at `0x31100` bytes against a `0x200000` slot, 90% free.
+`app_updater.bin` at `0x40df0` bytes against a `0x200000` slot, 87% free — that
+figure is with the whole core dump feature linked in, `espcoredump` and the
+panic-reason path included.
 
 ## The two slots are two different programs
 
@@ -123,6 +125,23 @@ neither reaches 64 KB and they are not contiguous.
 **The failure mode if it is ever too small:** `espcoredump` logs `Not enough
 space to save core dump!` and drops the dump. Nothing else breaks — the panic
 still reboots the unit as before.
+
+### The partition holds the FIRST dump, not the last
+
+`CONFIG_ESP_COREDUMP_FLASH_NO_OVERWRITE=y`. ESP-IDF defaults the other way — a
+second panic overwrites whatever is stored — and for a unit in a boot loop that
+is exactly the wrong choice: the crash that explains the loop is the one that
+started it, and the default would keep replacing it with a symptom of itself.
+
+**The cost, accepted:** clearing the partition stops being optional.
+`esp_core_dump_flash_hw_init()` logs `Core dump already exists in flash, will
+not overwrite it with a new core dump` and refuses to write, so a unit whose
+dump is read but never erased **captures no further panic for the rest of its
+life**. That is why the read-out path erases by default
+([../behavior/usb-command-dispatch.md](../behavior/usb-command-dispatch.md),
+`DUMP_ERASE`) and why `report_last_panic()` at boot deliberately does not —
+erasing there would throw away the very first crash before anyone could fetch
+it.
 
 ## Invariants
 

@@ -115,6 +115,18 @@ below, and leaves a fresh empty `[Unreleased]` here.
   offsets from its release notes, or the factory image from the next tag.
 
 ### Added
+- **`tool-usb.py dump FILE`**, the host end of the read-out. `DUMP_INFO` for
+  the size, a read loop in 4096-byte chunks, the file written **once from a
+  complete transfer**, and only then `DUMP_ERASE` - so the device keeps the
+  only copy until the bytes are on disk, and a failed write leaves the dump in
+  place to be fetched again. An **absent** dump writes no file and exits **1**,
+  because `dump crash.bin && esp-coredump ... crash.bin` must not run the
+  second half against a file that was never written; a **corrupt** dump is
+  fetched anyway with a warning, since that is exactly the one worth looking
+  at. `--keep` skips the erase and says out loud what that costs. On success it
+  prints the `esp-coredump info_corefile --core-format raw` line, and warns
+  that the `.elf` must be the exact build that crashed - a rebuild produces a
+  plausible, wrong backtrace with no warning.
 - **The core dump partition now keeps the FIRST dump, not the last.**
   `CONFIG_ESP_COREDUMP_FLASH_NO_OVERWRITE=y`, against the ESP-IDF default. In a
   boot loop the crash that explains the loop is the one that started it, and

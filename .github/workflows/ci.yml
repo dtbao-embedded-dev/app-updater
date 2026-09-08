@@ -2,6 +2,15 @@ name: CI
 
 # The gates R-SAN asks for: the compiler first, then clang-tidy and cppcheck,
 # then the host suite under ASan/UBSan, plus a secret scan over the whole tree.
+#
+# Every step runs through docs/scripts/tool-esp.py rather than idf.py or cmake
+# directly. The `-C` into the workspace, the fused `size size-components` and
+# the sanitizer flags then exist once. A second copy here is one that drifts
+# while CI stays green - building a real project, just not the one that changed.
+#
+# The product is named with `-w` on every build step: the script infers no
+# default, and a runner has no .env.esp to read one from. It is also the only
+# place this workflow says which product it builds, so it says it out loud.
 on:
   push:
     branches: [main, developing, "release/**"]
@@ -44,10 +53,21 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       # pip lives in the IDF virtualenv and is on PATH only after export.sh;
       # the default container shell is sh, which does not source it.
+      #
+      # cppcheck is the one analyser here NOT pinned to a version, and that is
+      # a known gap rather than an oversight: it publishes no wheel and no
+      # official Linux binary, and an apt version pin breaks the next time the
+      # container's base image moves. The consequence is real - a developer on
+      # a newer cppcheck can see findings this job does not, and the other way
+      # round. Two things keep that from being silent: the version is printed
+      # below, so a divergence is in the log; and the tree is kept clean under
+      # the newest cppcheck anyone here runs, which is a superset of this one's
+      # findings. If cppcheck ever ships a pinnable artifact, pin it.
       - name: Install the analysers
         shell: bash
         run: |
           apt-get update -qq && apt-get install -y -qq cppcheck
+          cppcheck --version
           . "$IDF_PATH/export.sh"
           python -m pip install --quiet "clang-tidy==${CLANG_TIDY_VERSION}"
       # clang-tidy needs the exact compile flags, and the only build here that
@@ -58,7 +78,6 @@ jobs:
         shell: bash
         run: |
           . "$IDF_PATH/export.sh"
-          cmake -S test/host -B build/host
           python docs/scripts/tool-esp.py analyse
 
   host-tests:
@@ -73,9 +92,7 @@ jobs:
         shell: bash
         run: |
           . "$IDF_PATH/export.sh"
-          cmake -S test/host -B build/host
-          cmake --build build/host
-          ctest --test-dir build/host --output-on-failure
+          python docs/scripts/tool-esp.py test
 
   sanitizers:
     name: host tests (ASan + UBSan)
@@ -92,9 +109,7 @@ jobs:
         shell: bash
         run: |
           . "$IDF_PATH/export.sh"
-          cmake -S test/host -B build/san -DSANITIZE=ON
-          cmake --build build/san
-          ctest --test-dir build/san --output-on-failure
+          python docs/scripts/tool-esp.py test --sanitize
 
   # DEFERRED - gcc -fanalyzer. Verified clean on the current tree, deliberately
   # not enabled: this codebase has no heap, no files and no buffer arithmetic,
@@ -118,13 +133,15 @@ jobs:
         shell: bash
         run: |
           . "$IDF_PATH/export.sh"
-          idf.py -C workspace/0xF001 build
-      # R-BLD-04: the number nobody looks at is the number that runs out.
+          python docs/scripts/tool-esp.py -w 0xF001 build
+      # R-BLD-04: the number nobody looks at is the number that runs out. The
+      # script fuses `size size-components`, so the per-component breakdown
+      # cannot be lost by someone typing the short form here.
       - name: Flash and RAM usage
         shell: bash
         run: |
           . "$IDF_PATH/export.sh"
-          idf.py -C workspace/0xF001 size
+          python docs/scripts/tool-esp.py -w 0xF001 size
 
   secrets:
     name: secret scan
@@ -144,5 +161,8 @@ jobs:
           curl -fsSL "${url}/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
             | tar -xz -C /usr/local/bin gitleaks
           gitleaks version
+      # --config is explicit rather than relying on gitleaks finding
+      # .gitleaks.toml itself: this job is a gate, and a gate that silently
+      # falls back to a different config than a developer runs is not one.
       - name: Scan
-        run: gitleaks detect --source . --redact --verbose
+        run: gitleaks detect --source . --config .gitleaks.toml --redact --verbose

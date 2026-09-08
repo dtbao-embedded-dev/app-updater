@@ -1,6 +1,5 @@
 /**
  * @file    updater.c
- * @author  dtbao
  * @date    2026-09-06
  * @brief   Decides when to check for a new image, drives the download, and
  *          confirms or rolls back the result.
@@ -208,8 +207,11 @@ static fw_err_t step_checking(updater_t *up, uint32_t now_ms) {
 }
 
 static fw_err_t step_downloading(updater_t *up, uint32_t now_ms) {
-    /* TODO(dtbao): drive ota_http_fetch() into esp_ota_write(), then
-     * esp_ota_set_boot_partition() and enter PENDING_BOOT. */
+    /* TODO(dtbao): drive ota_http_fetch() into ota_session_write(), then
+     * ota_boot_slot_set() and enter PENDING_BOOT. The USB path already
+     * runs those session rules in middleware/command; reuse them rather
+     * than growing a second set. Never esp_ota_* directly - see
+     * docs/memory-ai/rule/layer-boundaries.md. */
     note_failure(up, now_ms);
     return FW_ERR_UNSUPPORTED;
 }

@@ -4,10 +4,10 @@ category: architecture
 order: 3
 purpose: How the 0xF001 image is configured and compiled, including the main-less ESP-IDF build and the warning policy.
 status: active
-updated: 2026-09-06
+updated: 2026-09-07
 source: workspace/0xF001/CMakeLists.txt, workspace/0xF001/sdkconfig.defaults, VERSION, .clang-format
 confidence: confirmed
-keywords: EXTRA_COMPONENT_DIRS, COMPONENTS, house_warnings, PROJECT_VER, sdkconfig.defaults, idf.py, Werror, esp32s3
+keywords: EXTRA_COMPONENT_DIRS, COMPONENTS, house_warnings, PROJECT_VER, sdkconfig.defaults, idf.py, Werror, esp32s3, fw_config.h, FW_FEATURE_USB_COMMAND, FW_FEATURE_UPDATER, feature switch
 ---
 
 # Build and Toolchain
@@ -103,12 +103,26 @@ a developer's environment:
 | Knob | Value | Why |
 |------|-------|-----|
 | `CONFIG_IDF_TARGET` | `esp32s3` | The product's chip. |
-| `CONFIG_ESPTOOLPY_FLASHSIZE_4MB` | on | Must change together with `partitions.csv`. |
+| `CONFIG_ESPTOOLPY_FLASHSIZE_16MB` | on | Must change together with `partitions.csv`. |
 | `CONFIG_PARTITION_TABLE_CUSTOM` + `..._FILENAME` | `partitions.csv` | Two OTA slots, no factory. |
+| `CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240` | on | The part's maximum, over ESP-IDF's 160 MHz default: a TLS-over-Wi-Fi fetch is CPU bound, and a longer download has more chances to be interrupted. |
 | `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` | on | A new image gets one boot to confirm itself. |
-| `CONFIG_COMPILER_OPTIMIZATION_SIZE` | on | Two app slots must fit in 4 MB. |
+| `CONFIG_COMPILER_OPTIMIZATION_SIZE` | on | Two app slots must fit in 16 MB. |
 | `CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_ENABLE` | on | Asserts stay on in Release. |
 | `CONFIG_LOG_MAXIMUM_LEVEL_DEBUG` / `CONFIG_LOG_DEFAULT_LEVEL_INFO` | — | Level is a compile-time filter. |
+
+**The generated `sdkconfig` lives in `build/`, not next to the defaults.**
+`workspace/0xF001/CMakeLists.txt` sets `SDKCONFIG` to `${CMAKE_BINARY_DIR}/sdkconfig`
+before including `project.cmake`. ESP-IDF reads `sdkconfig.defaults` only when
+the generated file is absent, so left in the source tree it would outlive every
+clean and silently ignore later edits to the defaults — the failure being a
+partition table built for one flash size against a bootloader header carrying
+another. Down in `build/` it dies with the build directory, and deleting that
+directory is all a changed default needs.
+
+The cost: `idf.py menuconfig` changes are throwaway, cleared by the next clean.
+That is the intent — R-BLD-05 says a knob that matters belongs in
+`sdkconfig.defaults` under version control, not in a developer's working tree.
 
 ## Version single source
 
@@ -127,6 +141,25 @@ the changelog headings. See
   keeps the default.
 - `house_warnings()` must be defined before the IDF include so it is in scope in
   every component subdirectory.
+
+## Feature switches, and why they are not Kconfig
+
+`middleware/fw/include/fw_config.h` holds `FW_FEATURE_USB_COMMAND` and
+`FW_FEATURE_UPDATER`, both `1` by default. Setting one to `0` removes the
+calls, so the linker drops the feature from the image; the components still
+compile, which keeps a disabled feature from rotting while it is off.
+
+ESP-IDF's own mechanism for this is Kconfig, and it was not used, for one
+reason: a `CONFIG_*` symbol does not exist in the host test build, where
+`sdkconfig.h` is never generated. `#if CONFIG_FEATURE_X` would then silently
+evaluate to 0 in every host test — a switch that reads one way on target and
+the other way under test is worse than no switch. A plain header reads
+identically in both builds and is greppable in one place.
+
+The cost accepted: no `menuconfig` entry, and a product-specific answer means a
+header under `workspace/<pid>/` with that directory ahead of
+`middleware/fw/include` on the include path. Worth revisiting only when a
+second product actually disagrees.
 
 ## See also
 

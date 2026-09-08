@@ -1,6 +1,5 @@
 /**
  * @file    ota_http.c
- * @author  dtbao
  * @date    2026-09-06
  * @brief   Fetches a firmware image over HTTPS and hands it to the caller one
  *          chunk at a time.

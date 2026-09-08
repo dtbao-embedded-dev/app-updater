@@ -4,7 +4,7 @@ category: rule
 order: 5
 purpose: Where the version number lives, what bumps it, and the order of a release.
 status: active
-updated: 2026-09-06
+updated: 2026-09-07
 source: VERSION, CHANGELOG.md, workspace/0xF001/CMakeLists.txt, .github/workflows/release.yml
 confidence: confirmed
 keywords: VERSION, PROJECT_VER, CHANGELOG.md, docs/CHANGELOG, SemVer, Unreleased, esp_app_get_description
@@ -79,7 +79,7 @@ unit".
 
 ## Current state
 
-**`v0.1.0` is released.** Annotated tag `v0.1.0` on commit `aff615f2`, an
+**`v0.1.0` is released.** Annotated tag `v0.1.0` on commit `38fb9507`, an
 ancestor of `main`, published with eight artifacts. `VERSION` holds `0.1.0`,
 `docs/CHANGELOG/v0.1.0.md` holds its notes, and the root `CHANGELOG.md` has an
 empty `[Unreleased]` plus one index row.

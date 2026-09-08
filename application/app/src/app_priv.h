@@ -1,6 +1,5 @@
 /**
  * @file    app_priv.h
- * @author  dtbao
  * @date    2026-09-06
  * @brief   Declarations internal to the app module; never installed.
  *

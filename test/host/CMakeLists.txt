@@ -1,8 +1,10 @@
 # Host test harness (R-TST-02: pure logic must run without a board).
 #
 # The tests themselves live next to their modules (R-TST-07); this directory
-# only holds what it takes to compile and run them on a PC: the Unity runner
-# and the fake for the one vendor header the logic includes.
+# only holds what it takes to compile and run them on a PC: the Unity runner,
+# `fake/` - host implementations of our own driver contracts, which is where a
+# test of middleware belongs - and `stub/`, the shrinking set of vendor headers
+# that middleware still reaches for directly.
 #
 #   cmake -S test/host -B build/host && cmake --build build/host && ctest --test-dir build/host
 #
@@ -31,9 +33,13 @@ get_filename_component(REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
 # build the firmware can run the tests with nothing extra installed. Override
 # with -DUNITY_DIR=<dir containing unity.c> for any other checkout.
 if(NOT UNITY_DIR)
+    # IDF_PATH arrives with backslashes on Windows, and CMake reads `\.` and
+    # `\v` in a string as escape sequences - `E:\.espressif\v6.1\esp-idf` is a
+    # parse error, not a path. TO_CMAKE_PATH is what makes it one.
+    file(TO_CMAKE_PATH "$ENV{IDF_PATH}" idf_path)
     foreach(candidate
-            "$ENV{IDF_PATH}/components/unity/unity/src"
-            "$ENV{IDF_PATH}/components/unity/unity")
+            "${idf_path}/components/unity/unity/src"
+            "${idf_path}/components/unity/unity")
         if(EXISTS "${candidate}/unity.c")
             set(UNITY_DIR "${candidate}")
             break()
@@ -58,12 +64,34 @@ add_executable(host_tests
     runner.c
     "${REPO_ROOT}/middleware/fw/src/fw.c"
     "${REPO_ROOT}/middleware/fw/test/test_fw.c"
+    "${REPO_ROOT}/middleware/protocol/src/protocol.c"
+    "${REPO_ROOT}/middleware/protocol/test/test_protocol.c"
+    "${REPO_ROOT}/middleware/command/src/command.c"
+    "${REPO_ROOT}/middleware/command/src/command_dump.c"
+    "${REPO_ROOT}/middleware/command/src/command_upgrade.c"
+    "${REPO_ROOT}/middleware/command/test/test_command.c"
+    "${REPO_ROOT}/middleware/cfg/src/cfg.c"
+    "${REPO_ROOT}/middleware/cfg/test/test_cfg.c"
+    fake/bsp_fake.c
+    fake/coredump_fake.c
+    fake/nvs_fake.c
+    fake/ota_fake.c
+    "${REPO_ROOT}/driver/storage/src/storage.c"
+    "${REPO_ROOT}/driver/storage/test/test_storage.c"
     "${REPO_ROOT}/application/updater/src/updater.c"
     "${REPO_ROOT}/application/updater/test/test_updater.c")
 
 target_include_directories(host_tests PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}/stub"
+    "${CMAKE_CURRENT_LIST_DIR}/fake"
+    "${REPO_ROOT}/driver/bsp/include"
+    "${REPO_ROOT}/driver/coredump/include"
+    "${REPO_ROOT}/driver/ota/include"
+    "${REPO_ROOT}/driver/storage/include"
     "${REPO_ROOT}/middleware/fw/include"
+    "${REPO_ROOT}/middleware/protocol/include"
+    "${REPO_ROOT}/middleware/command/include"
+    "${REPO_ROOT}/middleware/cfg/include"
     "${REPO_ROOT}/application/updater/include")
 
 target_link_libraries(host_tests PRIVATE unity)

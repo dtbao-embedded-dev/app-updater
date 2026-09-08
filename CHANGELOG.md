@@ -10,6 +10,54 @@ below, and leaves a fresh empty `[Unreleased]` here.
 
 ## [Unreleased]
 
+### Known limitations
+
+Read these before installing anything. None of them is new in this release;
+they are what this release still is.
+
+- **This is a PATCH number over a change that breaks compatibility.** The
+  partition table moved: `app_firmware` shrank from `0xDE0000` to `0xDD0000` to
+  make room for a 64 KB `coredump` partition at `0xFF0000`. **Do not OTA a unit
+  running 0.1.0 to this version** — the image is built against the new table
+  and the unit still holds the old one. Provision with the merged factory image
+  at `0x0`, which writes the table too. This repo's own rule calls a
+  partition-table change MAJOR; shipping it as PATCH is a deliberate departure
+  recorded as deviation 12, and this bullet is the whole reason that departure
+  needs stating out loud.
+- **Not one line of this firmware has ever executed on hardware.** Every claim
+  in the notes below was proved on a host, in CI, or by reading a map file.
+  The build is clean, 94 host tests pass, and no board has booted it.
+- **Rollback has never been verified**, which this repo's release rule requires
+  before shipping an update mechanism. An update path with no proven way back
+  turns one bad release into a truck roll per unit.
+- **A freshly flashed image confirms itself with no self-test**
+  (`confirm_or_roll_back()`), so a broken image marks itself valid and the
+  rollback never fires. This defeats the product's whole reason to exist and it
+  shipped in 0.1.0 as well.
+- **The updater does not update.** `step_checking()` and `step_downloading()`
+  are not implemented, so it never finds or fetches anything. It fails safe and
+  does nothing. Network bring-up is not in this repo at all.
+- **The BSP board table is placeholders** — GPIO numbers, polarity and flash
+  size were never checked against a schematic. First power-on can drive a pin
+  into something that does not like it.
+- **The core dump path is proven only on the host.** The partition, the driver,
+  the three USB opcodes, the boot-time panic report and `tool-usb.py dump` are
+  all in place and all tested off-target; only a real panic on real silicon
+  writes a dump, so nothing yet shows the stored bytes read back as written.
+- **Reading a dump erases it, and that is mandatory.**
+  `CONFIG_ESP_COREDUMP_FLASH_NO_OVERWRITE` is on so the *first* crash is kept,
+  which means a unit whose dump is read but never erased captures no further
+  panic. `tool-usb.py dump` erases by default; `--keep` is the opt-out.
+- **A dump is only decodable against the exact `.elf` that crashed.** This
+  release publishes `app_updater.elf`, and its `SHA256SUMS` entry for that file
+  is the same number a dump carries — so grep the hash from the crash to find
+  the release. The sibling `app_firmware` repo publishes no `.elf` yet.
+- **There is no on-target test**, which this repo's own rule makes the last
+  gate before a release tag.
+- **The console is on UART0, not USB.** Flashing has no USB auto-download
+  reset: use a UART0 bridge, or hold BOOT. A unit that looks dead after
+  following older instructions is probably fine.
+
 ### Changed
 - **Middleware calls mapped drivers, not the vendor SDK.** The defect this
   started from: `command_upgrade_begin()` called `esp_ota_begin()` directly, so

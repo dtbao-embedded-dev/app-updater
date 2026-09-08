@@ -78,7 +78,7 @@ updated: 2026-09-08
   `ota_http`'s HTTP client, and no `esp_ota_*` / `esp_partition_*` / `nvs_*` /
   `esp_restart` / `esp_read_mac` / `esp_rom` anywhere in `middleware/` or
   `application/` outside two lines of deliberate comment prose. `driver/` holds
-  four modules now: `bsp`, `ota`, `storage`, `usb_cdc`.
+  five modules now: `bsp`, `coredump`, `ota`, `storage`, `usb_cdc`.
 - **83 host tests, green**, up from 69, built under the firmware's own
   `-Werror` warning set. Eleven of the new ones are the blob store's first
   tests ever. **Three assertions were proved to have teeth by mutation**, not

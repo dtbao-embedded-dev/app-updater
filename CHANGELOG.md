@@ -115,6 +115,15 @@ below, and leaves a fresh empty `[Unreleased]` here.
   offsets from its release notes, or the factory image from the next tag.
 
 ### Added
+- **The core dump partition now keeps the FIRST dump, not the last.**
+  `CONFIG_ESP_COREDUMP_FLASH_NO_OVERWRITE=y`, against the ESP-IDF default. In a
+  boot loop the crash that explains the loop is the one that started it, and
+  the default kept replacing it with a symptom of itself. **The cost,
+  accepted:** clearing the partition stops being optional - `espcoredump`
+  refuses to write while a dump is stored, so a unit read but never erased
+  captures no further panic for the rest of its life. That is why `DUMP_ERASE`
+  exists, why `tool-usb.py dump` erases by default, and why
+  `report_last_panic()` at boot deliberately does not.
 - **The boot log now says why the last run ended.** `report_last_panic()` in
   `application/app/src/app.c`, called right after `confirm_or_roll_back()` so
   R-VER-08 keeps the first word: if the `coredump` partition holds anything, it

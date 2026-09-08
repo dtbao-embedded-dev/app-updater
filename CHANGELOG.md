@@ -115,6 +115,17 @@ below, and leaves a fresh empty `[Unreleased]` here.
   offsets from its release notes, or the factory image from the next tag.
 
 ### Added
+- **The boot log now says why the last run ended.** `report_last_panic()` in
+  `application/app/src/app.c`, called right after `confirm_or_roll_back()` so
+  R-VER-08 keeps the first word: if the `coredump` partition holds anything, it
+  logs the panic reason as text plus whether the dump is valid or corrupt and
+  how many bytes it is. Needs no module up, because `driver/coredump` has no
+  lifecycle at all. **Silent on a clean boot** - a "no core dump" line every
+  time trains a reader to skip the one boot where it matters - and it does
+  **not** erase what it read, so `DUMP_READ` can still fetch it. The reason is
+  already text when it arrives, so nothing here symbolises an address; that is
+  the difference between a one-call step and a host-tool problem. Image grew
+  0x3fc90 to 0x40d80.
 - **The three core dump handlers, and the buffer they answer out of.**
   `middleware/command/src/command_dump.c` serves `DUMP_INFO` / `DUMP_READ` /
   `DUMP_ERASE` through `driver/coredump`. `DUMP_READ` could not use the
